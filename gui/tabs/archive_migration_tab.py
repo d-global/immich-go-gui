@@ -597,7 +597,9 @@ class ArchiveMigrationPage(QWidget):
             )
             return
         if self.host is None:
-            QMessageBox.warning(self, self._tr("queue_error"), self._tr("queue_no_host"))
+            QMessageBox.warning(
+                self, self._tr("queue_error"), self._tr("queue_no_host")
+            )
             return
 
         binary_manager = getattr(self.host, "binary_manager", None)
@@ -807,7 +809,10 @@ class ArchiveMigrationPage(QWidget):
             if status_item is not None:
                 status_item.setText(status)
                 status_item.setData(Qt.ItemDataRole.UserRole, status)
-            if status in {ArchiveFolderStatus.DONE.value, ArchiveFolderStatus.SKIP.value}:
+            if status in {
+                ArchiveFolderStatus.DONE.value,
+                ArchiveFolderStatus.SKIP.value,
+            }:
                 check.setCheckState(Qt.CheckState.Unchecked)
                 check.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             return
@@ -864,7 +869,9 @@ class ArchiveMigrationPage(QWidget):
         self.summary_label.setText(
             self._tr("selected", folders=folders, files=files, size=_format_bytes(size))
         )
-        queue_running = self._queue_thread is not None and self._queue_thread.isRunning()
+        queue_running = (
+            self._queue_thread is not None and self._queue_thread.isRunning()
+        )
         self.queue_start_button.setEnabled(folders > 0 and not queue_running)
 
     def _update_root_files_label(self) -> None:
