@@ -248,11 +248,11 @@ def scan_archive_root(
             child,
             cancel_event=cancel_event,
             progress=(
-                lambda count, size, idx=index, path=child: on_progress(
-                    idx, total, str(path), count, size
+                lambda count, size, idx=index, path=child: (
+                    on_progress(idx, total, str(path), count, size)
+                    if on_progress is not None
+                    else None
                 )
-                if on_progress is not None
-                else None
             ),
         )
         result.scan_errors.extend(errors)
