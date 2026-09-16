@@ -194,7 +194,11 @@ def run_archive_queue(
             if stop_on_error:
                 break
             continue
-        if entry.status not in {ArchiveFolderStatus.READY, ArchiveFolderStatus.ERROR, ArchiveFolderStatus.PARTIAL}:
+        if entry.status not in {
+            ArchiveFolderStatus.READY,
+            ArchiveFolderStatus.ERROR,
+            ArchiveFolderStatus.PARTIAL,
+        }:
             raise ValueError(
                 f"Folder '{entry.name}' must be READY/ERROR/PARTIAL before execution, got {entry.status.value}"
             )
