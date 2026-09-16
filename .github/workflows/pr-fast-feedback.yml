@@ -123,7 +123,9 @@ jobs:
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Install dependencies
-        run: uv sync --dev
+        # The upstream lock currently carries stale virtual-project metadata.
+        # Frozen mode keeps CI from rewriting a tracked file before pre-commit.
+        run: uv sync --dev --frozen
 
       - name: Install Linux Desktop Dependencies
         run: |
