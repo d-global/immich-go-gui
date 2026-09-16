@@ -17,7 +17,8 @@ from .archive_migration import (
     ArchiveFolderStatus,
     ArchiveMigrationState,
 )
-from .command_builder import build_plan_from_state
+from .cli_schema import TAB_COMMANDS
+from .command_builder import build_plan_from_state, mask_command_for_display
 from .models import CommandPlan
 
 
@@ -127,6 +128,15 @@ def build_archive_queue_items(
         )
         if plan.errors:
             raise ValueError(f"{entry.name}: {'; '.join(plan.errors)}")
+
+        # ``no-ui`` is an internal runner concern and is intentionally hidden
+        # from the normal advanced flag registry.  Like the existing Monitor
+        # runner, Archive Migration executes immich-go with captured pipes, so
+        # the TUI must be disabled explicitly before the positional path.
+        command_len = len(TAB_COMMANDS.get("upload-folder", ()))
+        if "--no-ui" not in plan.argv:
+            plan.argv.insert(command_len, "--no-ui")
+            plan.display_argv = mask_command_for_display([binary_path] + plan.argv)
 
         items.append(
             ArchiveQueueItem(
@@ -263,9 +273,6 @@ def _merged_advanced_state(
     clean_tag = tag.strip()
     merged["tag"] = {"enabled": bool(clean_tag), "value": clean_tag}
     merged["session-tag"] = {"enabled": session_tag, "value": session_tag}
-    # Queue runs are captured by the GUI; an interactive terminal UI would
-    # stall the worker and makes sequential execution impossible to observe.
-    merged["no-ui"] = {"enabled": True, "value": True}
     return merged
 
 
