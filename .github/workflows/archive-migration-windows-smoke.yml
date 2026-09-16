@@ -1,0 +1,63 @@
+name: Archive Migration Windows Smoke Build
+
+on:
+  pull_request:
+    paths:
+      - 'core/archive_migration.py'
+      - 'core/archive_migration_queue.py'
+      - 'core/folder_runner.py'
+      - 'gui/tabs/archive_migration_tab.py'
+      - 'tests/test_archive_migration*.py'
+      - '.github/workflows/archive-migration-windows-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-portable:
+    name: Windows portable smoke build
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+
+      - name: Run archive migration tests
+        run: uv run --frozen pytest tests/test_archive_migration.py tests/test_archive_migration_queue.py tests/test_archive_migration_gui.py
+
+      - name: Self-test entrypoint
+        run: uv run --frozen python app.py --self-test
+
+      - name: Build Windows standalone
+        shell: bash
+        run: uv run --frozen python -m nuitka --output-filename=Immich-Go-GUI.exe app.py
+
+      - name: Create portable archive
+        shell: pwsh
+        run: |
+          if (Test-Path 'app.dist/app.exe') {
+            Rename-Item -Path 'app.dist/app.exe' -NewName 'Immich-Go-GUI.exe'
+          }
+          if (-not (Test-Path 'app.dist/Immich-Go-GUI.exe')) {
+            throw 'Immich-Go-GUI.exe was not produced by Nuitka'
+          }
+          Set-Content -Path 'app.dist/README.txt' -Value 'Archive Migration development smoke build. Double-click Immich-Go-GUI.exe to launch.'
+          Compress-Archive -Path 'app.dist/*' -DestinationPath 'Immich-Go-GUI-Archive-Migration-Windows-Portable.zip'
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Immich-Go-GUI-Archive-Migration-Windows-Portable
+          path: Immich-Go-GUI-Archive-Migration-Windows-Portable.zip
+          if-no-files-found: error
+          retention-days: 14
