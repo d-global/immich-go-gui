@@ -1,5 +1,7 @@
 # Archive Migration Queue
 
+**English** · [Русский](archive-migration.ru.md)
+
 This fork adds a controlled, one-time archive migration workflow on top of the existing Immich-Go GUI primitives. It is deliberately separate from the Backup Monitor.
 
 ## Goal
