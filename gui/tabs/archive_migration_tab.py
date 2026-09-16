@@ -11,7 +11,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -33,13 +33,11 @@ from PySide6.QtWidgets import (
 
 from core.archive_migration import (
     ArchiveFolderStatus,
-    ArchiveMigrationState,
     ArchiveMigrationStateStore,
     ArchiveScanCancelled,
     scan_archive_root,
 )
 from core.profile_manager import active_profile_name
-
 
 _TRANSLATIONS = {
     "en": {
@@ -324,7 +322,9 @@ class ArchiveMigrationPage(QWidget):
     def _choose_root(self) -> None:
         current = self.root_edit.text().strip()
         start_dir = current if Path(current).is_dir() else str(Path.home())
-        selected = QFileDialog.getExistingDirectory(self, self._tr("archive_root"), start_dir)
+        selected = QFileDialog.getExistingDirectory(
+            self, self._tr("archive_root"), start_dir
+        )
         if selected:
             self.root_edit.setText(selected)
 
@@ -411,7 +411,9 @@ class ArchiveMigrationPage(QWidget):
         self.table.blockSignals(True)
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
-        entries = sorted(self.state.folders.values(), key=lambda item: item.name.casefold())
+        entries = sorted(
+            self.state.folders.values(), key=lambda item: item.name.casefold()
+        )
         for entry in entries:
             row = self.table.rowCount()
             self.table.insertRow(row)
