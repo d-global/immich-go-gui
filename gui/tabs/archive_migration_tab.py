@@ -1,14 +1,15 @@
 """Archive Migration workbench UI.
 
 This page is intentionally separate from the regular Archive workflows and from
-Backup Monitor.  It surfaces the persistent first-level-folder migration state
-from :mod:`core.archive_migration` and performs scans in a worker thread so a
-large or slow archive cannot freeze the GUI.
+Backup Monitor. It keeps durable first-level-folder migration state, scans in a
+worker thread, and executes selected folders through the existing upstream
+``upload-folder`` command builder and hidden runner.
 """
 
 from __future__ import annotations
 
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, Signal
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QTableWidget,
@@ -37,6 +39,15 @@ from core.archive_migration import (
     ArchiveScanCancelled,
     scan_archive_root,
 )
+from core.archive_migration_queue import (
+    ArchiveQueueOptions,
+    build_archive_queue_items,
+    prepare_archive_queue,
+    run_archive_queue,
+)
+from core.config_manager import default_config_dir
+from core.folder_runner import RunnerState, run_folder_upload
+from core.monitor_config import MonitorConfig
 from core.profile_manager import active_profile_name
 
 _TRANSLATIONS = {
@@ -57,7 +68,7 @@ _TRANSLATIONS = {
         "size": "Size",
         "status": "Status",
         "selected": "Selected: {folders} folders · {files} files · {size}",
-        "root_files": "Files directly in archive root: {files} · {size}",
+        "root_files": "Files directly in archive root: {files} · {size} · not included in the folder queue",
         "no_root": "Choose an archive root, then scan it.",
         "scanning": "Scanning {index}/{total}: {name} · {files} files · {size}",
         "scan_started": "Scanning archive...",
@@ -65,6 +76,23 @@ _TRANSLATIONS = {
         "scan_cancelled": "Scan cancelled. Existing state was kept unchanged.",
         "scan_failed": "Archive scan failed",
         "invalid_root": "Choose an existing folder before scanning.",
+        "queue_tag": "Shared tag",
+        "queue_tag_hint": "optional, e.g. cloud/krasnodar",
+        "session_tag": "Add session tag",
+        "stop_on_error": "Stop on first error",
+        "start_queue": "Upload selected",
+        "cancel_queue": "Cancel queue",
+        "queue_idle": "Select folders to prepare the migration queue.",
+        "queue_starting": "Preparing {folders} folders...",
+        "queue_progress": "{index}/{total} · {name} · {status}",
+        "queue_cancelling": "Cancelling the current upload and stopping the queue...",
+        "queue_finished": "Queue complete: DONE {done} · PARTIAL {partial} · ERROR {errors} · not started {not_started}",
+        "queue_finished_cancelled": "Queue cancelled: DONE {done} · PARTIAL {partial} · ERROR {errors} · not started {not_started}",
+        "queue_error": "Archive queue error",
+        "queue_no_selection": "Select at least one visible folder first.",
+        "queue_no_host": "Queue execution is available only inside the main application window.",
+        "queue_no_binary": "Immich-Go binary is not available. Configure or download it first.",
+        "queue_log": "Queue log",
     },
     "ru": {
         "title": "Миграция архива",
@@ -83,7 +111,7 @@ _TRANSLATIONS = {
         "size": "Размер",
         "status": "Статус",
         "selected": "Выбрано: {folders} папок · {files} файлов · {size}",
-        "root_files": "Файлы прямо в корне архива: {files} · {size}",
+        "root_files": "Файлы прямо в корне архива: {files} · {size} · в очередь папок не входят",
         "no_root": "Выберите корень архива и запустите сканирование.",
         "scanning": "Сканирование {index}/{total}: {name} · {files} файлов · {size}",
         "scan_started": "Сканирование архива...",
@@ -91,6 +119,23 @@ _TRANSLATIONS = {
         "scan_cancelled": "Сканирование остановлено. Старое состояние сохранено без изменений.",
         "scan_failed": "Ошибка сканирования архива",
         "invalid_root": "Перед сканированием выберите существующую папку.",
+        "queue_tag": "Общий тег",
+        "queue_tag_hint": "необязательно, например cloud/krasnodar",
+        "session_tag": "Добавить тег сессии",
+        "stop_on_error": "Остановиться на первой ошибке",
+        "start_queue": "Загрузить выбранное",
+        "cancel_queue": "Остановить очередь",
+        "queue_idle": "Выберите папки для подготовки очереди миграции.",
+        "queue_starting": "Подготовка очереди: {folders} папок...",
+        "queue_progress": "{index}/{total} · {name} · {status}",
+        "queue_cancelling": "Останавливаю текущую загрузку и очередь...",
+        "queue_finished": "Очередь завершена: DONE {done} · PARTIAL {partial} · ERROR {errors} · не запущено {not_started}",
+        "queue_finished_cancelled": "Очередь остановлена: DONE {done} · PARTIAL {partial} · ERROR {errors} · не запущено {not_started}",
+        "queue_error": "Ошибка очереди миграции",
+        "queue_no_selection": "Сначала выберите хотя бы одну видимую папку.",
+        "queue_no_host": "Запуск очереди доступен только внутри основного окна программы.",
+        "queue_no_binary": "Immich-Go не найден. Сначала настройте или загрузите бинарник.",
+        "queue_log": "Лог очереди",
     },
 }
 
@@ -138,6 +183,83 @@ class _ArchiveScanThread(QThread):
         self.scan_finished.emit(result)
 
 
+class _ArchiveQueueThread(QThread):
+    progress = Signal(int, int, str, str, str)
+    log_line = Signal(str, str)
+    queue_finished = Signal(object)
+    queue_failed = Signal(str)
+
+    def __init__(
+        self,
+        *,
+        state,
+        items,
+        profile_name: str,
+        monitor_config: MonitorConfig,
+        server_url: str,
+        api_key: str,
+        log_dir: str,
+        stop_on_error: bool,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.state = state
+        self.items = list(items)
+        self.profile_name = profile_name
+        self.monitor_config = monitor_config
+        self.server_url = server_url
+        self.api_key = api_key
+        self.log_dir = log_dir
+        self.stop_on_error = stop_on_error
+        self._cancel_event = threading.Event()
+        self.runner_state = RunnerState()
+
+    def cancel(self) -> None:
+        self._cancel_event.set()
+        self.runner_state.cancel_event.set()
+        self.runner_state.pause_event.set()
+
+    def _persist(self, state) -> None:
+        ArchiveMigrationStateStore.save(state, self.profile_name)
+
+    def _execute(self, item):
+        self.log_line.emit(item.name, "Starting upload")
+        return run_folder_upload(
+            folder=item.path,
+            config=self.monitor_config,
+            server_url=self.server_url,
+            api_key=self.api_key,
+            since_utc=datetime.now(UTC),
+            log_dir=self.log_dir,
+            state=self.runner_state,
+            on_log=lambda folder, message: self.log_line.emit(folder, message),
+            prepared_plan=item.plan,
+        )
+
+    def run(self) -> None:
+        self.runner_state.reset()
+        self.runner_state.set_total_folders(len(self.items))
+        try:
+            summary = run_archive_queue(
+                self.state,
+                self.items,
+                execute=self._execute,
+                persist=self._persist,
+                stop_on_error=self.stop_on_error,
+                cancel_event=self._cancel_event,
+                on_progress=lambda index, total, item, status: self.progress.emit(
+                    index, total, item.path, item.name, status
+                ),
+            )
+            self.queue_finished.emit(summary)
+        except Exception as exc:
+            self.queue_failed.emit(str(exc))
+        finally:
+            self.runner_state.set_running(False)
+            self.runner_state.set_current_folder("")
+            self.runner_state.set_current_file("")
+
+
 class ArchiveMigrationPage(QWidget):
     """Workbench for controlled one-time archive migration."""
 
@@ -147,6 +269,7 @@ class ArchiveMigrationPage(QWidget):
         self.profile_name = active_profile_name()
         self.state = ArchiveMigrationStateStore.load(self.profile_name)
         self._scan_thread: _ArchiveScanThread | None = None
+        self._queue_thread: _ArchiveQueueThread | None = None
         self._language = self._load_language()
         self._build_ui()
         self._load_state_into_ui()
@@ -244,6 +367,48 @@ class ArchiveMigrationPage(QWidget):
         filter_row.addWidget(self.hide_done_check)
         outer.addLayout(filter_row)
 
+        queue_frame = QFrame()
+        queue_frame.setObjectName("Card")
+        queue_layout = QVBoxLayout(queue_frame)
+        queue_layout.setContentsMargins(16, 12, 16, 12)
+        queue_layout.setSpacing(8)
+
+        queue_controls = QHBoxLayout()
+        self.queue_tag_label = QLabel()
+        queue_controls.addWidget(self.queue_tag_label)
+        self.queue_tag_edit = QLineEdit()
+        self.queue_tag_edit.setClearButtonEnabled(True)
+        queue_controls.addWidget(self.queue_tag_edit, 1)
+        self.session_tag_check = QCheckBox()
+        self.session_tag_check.setChecked(False)
+        queue_controls.addWidget(self.session_tag_check)
+        self.stop_on_error_check = QCheckBox()
+        self.stop_on_error_check.setChecked(True)
+        queue_controls.addWidget(self.stop_on_error_check)
+        self.queue_start_button = QPushButton()
+        self.queue_start_button.setObjectName("BtnRun")
+        self.queue_start_button.clicked.connect(self.start_queue)
+        self.queue_start_button.setEnabled(False)
+        queue_controls.addWidget(self.queue_start_button)
+        self.queue_cancel_button = QPushButton()
+        self.queue_cancel_button.clicked.connect(self.cancel_queue)
+        self.queue_cancel_button.setVisible(False)
+        queue_controls.addWidget(self.queue_cancel_button)
+        queue_layout.addLayout(queue_controls)
+
+        self.queue_progress_label = QLabel()
+        self.queue_progress_label.setObjectName("MutedText")
+        queue_layout.addWidget(self.queue_progress_label)
+        self.queue_progress_bar = QProgressBar()
+        self.queue_progress_bar.setVisible(False)
+        queue_layout.addWidget(self.queue_progress_bar)
+        self.queue_log = QPlainTextEdit()
+        self.queue_log.setReadOnly(True)
+        self.queue_log.setMaximumBlockCount(1000)
+        self.queue_log.setMaximumHeight(130)
+        queue_layout.addWidget(self.queue_log)
+        outer.addWidget(queue_frame)
+
         self.table = QTableWidget(0, 5)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -275,9 +440,12 @@ class ArchiveMigrationPage(QWidget):
             self.progress_label.setText("")
         else:
             self.progress_label.setText(self._tr("no_root"))
+        self.queue_progress_label.setText(self._tr("queue_idle"))
 
     def reload_profile_state(self) -> None:
         """Reload state after the active upstream profile changes."""
+        if self._queue_thread is not None and self._queue_thread.isRunning():
+            return
         profile_name = active_profile_name()
         if profile_name == self.profile_name:
             return
@@ -305,6 +473,13 @@ class ArchiveMigrationPage(QWidget):
         self.search_edit.setPlaceholderText(self._tr("search"))
         self.hide_done_check.setText(self._tr("hide_done"))
         self.status_combo.setItemText(0, self._tr("all_statuses"))
+        self.queue_tag_label.setText(self._tr("queue_tag") + ":")
+        self.queue_tag_edit.setPlaceholderText(self._tr("queue_tag_hint"))
+        self.session_tag_check.setText(self._tr("session_tag"))
+        self.stop_on_error_check.setText(self._tr("stop_on_error"))
+        self.queue_start_button.setText(self._tr("start_queue"))
+        self.queue_cancel_button.setText(self._tr("cancel_queue"))
+        self.queue_log.setPlaceholderText(self._tr("queue_log"))
         self.table.setHorizontalHeaderLabels(
             [
                 self._tr("select"),
@@ -318,6 +493,8 @@ class ArchiveMigrationPage(QWidget):
         self._update_selection_summary()
         if not self.root_edit.text().strip() and not self._scan_thread:
             self.progress_label.setText(self._tr("no_root"))
+        if self._queue_thread is None and not self.queue_progress_label.text().strip():
+            self.queue_progress_label.setText(self._tr("queue_idle"))
 
     def _choose_root(self) -> None:
         current = self.root_edit.text().strip()
@@ -334,6 +511,8 @@ class ArchiveMigrationPage(QWidget):
             QMessageBox.warning(self, self._tr("scan_failed"), self._tr("invalid_root"))
             return
         if self._scan_thread is not None and self._scan_thread.isRunning():
+            return
+        if self._queue_thread is not None and self._queue_thread.isRunning():
             return
 
         self.progress_label.setText(self._tr("scan_started"))
@@ -375,8 +554,6 @@ class ArchiveMigrationPage(QWidget):
         )
 
     def _on_scan_finished(self, result) -> None:
-        # Atomic from the UI perspective: the old table/state stays visible until
-        # the new scan completes successfully.
         self.state.apply_scan(result)
         ArchiveMigrationStateStore.save(self.state, self.profile_name)
         self.root_edit.setText(result.root_path)
@@ -407,6 +584,179 @@ class ArchiveMigrationPage(QWidget):
         if thread is not None:
             thread.deleteLater()
 
+    def start_queue(self) -> None:
+        if self._queue_thread is not None and self._queue_thread.isRunning():
+            return
+        if self._scan_thread is not None and self._scan_thread.isRunning():
+            return
+
+        selected_paths = self.selected_folder_paths()
+        if not selected_paths:
+            QMessageBox.warning(
+                self, self._tr("queue_error"), self._tr("queue_no_selection")
+            )
+            return
+        if self.host is None:
+            QMessageBox.warning(self, self._tr("queue_error"), self._tr("queue_no_host"))
+            return
+
+        binary_manager = getattr(self.host, "binary_manager", None)
+        binary_path = binary_manager.resolve_binary_path() if binary_manager else ""
+        if not binary_path:
+            QMessageBox.warning(
+                self, self._tr("queue_error"), self._tr("queue_no_binary")
+            )
+            return
+
+        try:
+            config_state = self.host._collect_config_state()
+            if hasattr(self.host, "_resolve_monitor_credentials"):
+                server_url, api_key = self.host._resolve_monitor_credentials()
+                if server_url:
+                    config_state["server"] = server_url
+                if api_key:
+                    config_state["api_key"] = api_key
+            server_url = str(config_state.get("server") or "")
+            api_key = str(config_state.get("api_key") or "")
+            advanced_state = (
+                self.host._collect_advanced_state("upload-folder")
+                if hasattr(self.host, "_collect_advanced_state")
+                else None
+            )
+            options = ArchiveQueueOptions(
+                tag=self.queue_tag_edit.text().strip(),
+                session_tag=self.session_tag_check.isChecked(),
+                stop_on_error=self.stop_on_error_check.isChecked(),
+            )
+            items = build_archive_queue_items(
+                self.state,
+                selected_paths,
+                config_state=config_state,
+                binary_path=binary_path,
+                options=options,
+                base_advanced_state=advanced_state,
+            )
+            if not items:
+                raise ValueError(self._tr("queue_no_selection"))
+            prepare_archive_queue(
+                self.state,
+                items,
+                persist=lambda state: ArchiveMigrationStateStore.save(
+                    state, self.profile_name
+                ),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, self._tr("queue_error"), str(exc))
+            return
+
+        monitor_config = getattr(self.host, "monitor_config", MonitorConfig())
+        log_dir = monitor_config.log_dir or str(Path(default_config_dir()) / "logs")
+
+        self._refresh_status_cells()
+        self.queue_log.clear()
+        self.queue_progress_label.setText(
+            self._tr("queue_starting", folders=len(items))
+        )
+        self.queue_progress_bar.setRange(0, len(items))
+        self.queue_progress_bar.setValue(0)
+        self.queue_progress_bar.setVisible(True)
+        self._append_queue_log("", f"Queue prepared: {len(items)} folders")
+
+        thread = _ArchiveQueueThread(
+            state=self.state,
+            items=items,
+            profile_name=self.profile_name,
+            monitor_config=monitor_config,
+            server_url=server_url,
+            api_key=api_key,
+            log_dir=log_dir,
+            stop_on_error=options.stop_on_error,
+            parent=self,
+        )
+        self._queue_thread = thread
+        thread.progress.connect(self._on_queue_progress)
+        thread.log_line.connect(self._append_queue_log)
+        thread.queue_finished.connect(self._on_queue_finished)
+        thread.queue_failed.connect(self._on_queue_failed)
+        thread.finished.connect(self._on_queue_thread_finished)
+        self._set_queue_running(True)
+        thread.start()
+
+    def cancel_queue(self) -> None:
+        if self._queue_thread is None or not self._queue_thread.isRunning():
+            return
+        self.queue_cancel_button.setEnabled(False)
+        self.queue_progress_label.setText(self._tr("queue_cancelling"))
+        self._append_queue_log("", self._tr("queue_cancelling"))
+        self._queue_thread.cancel()
+
+    def _set_queue_running(self, running: bool) -> None:
+        self.root_edit.setEnabled(not running)
+        self.choose_button.setEnabled(not running)
+        self.scan_button.setEnabled(not running)
+        self.table.setEnabled(not running)
+        self.queue_tag_edit.setEnabled(not running)
+        self.session_tag_check.setEnabled(not running)
+        self.stop_on_error_check.setEnabled(not running)
+        self.queue_cancel_button.setVisible(running)
+        self.queue_cancel_button.setEnabled(running)
+        if running:
+            self.queue_start_button.setEnabled(False)
+        else:
+            self._update_selection_summary()
+
+    def _on_queue_progress(
+        self, index: int, total: int, path: str, name: str, status: str
+    ) -> None:
+        self._set_status_cell(path, status)
+        self.queue_progress_bar.setRange(0, max(total, 1))
+        value = index if status != ArchiveFolderStatus.UPLOADING.value else index - 1
+        self.queue_progress_bar.setValue(max(0, min(value, total)))
+        self.queue_progress_label.setText(
+            self._tr(
+                "queue_progress",
+                index=index,
+                total=total,
+                name=name,
+                status=status,
+            )
+        )
+        self._apply_filters()
+
+    def _on_queue_finished(self, summary) -> None:
+        self._refresh_status_cells()
+        key = "queue_finished_cancelled" if summary.cancelled else "queue_finished"
+        self.queue_progress_label.setText(
+            self._tr(
+                key,
+                done=summary.done,
+                partial=summary.partial,
+                errors=summary.errors,
+                not_started=summary.not_started,
+            )
+        )
+        completed = summary.done + summary.partial + summary.errors
+        self.queue_progress_bar.setValue(min(completed, summary.total))
+        self._append_queue_log("", self.queue_progress_label.text())
+        self._apply_filters()
+
+    def _on_queue_failed(self, message: str) -> None:
+        self._refresh_status_cells()
+        self.queue_progress_label.setText(message)
+        self._append_queue_log("", f"ERROR: {message}")
+        QMessageBox.critical(self, self._tr("queue_error"), message)
+
+    def _on_queue_thread_finished(self) -> None:
+        thread = self._queue_thread
+        self._queue_thread = None
+        self._set_queue_running(False)
+        if thread is not None:
+            thread.deleteLater()
+
+    def _append_queue_log(self, folder: str, message: str) -> None:
+        prefix = f"[{folder}] " if folder else ""
+        self.queue_log.appendPlainText(prefix + message)
+
     def _populate_table(self) -> None:
         self.table.blockSignals(True)
         self.table.setSortingEnabled(False)
@@ -419,11 +769,10 @@ class ArchiveMigrationPage(QWidget):
             self.table.insertRow(row)
 
             check = QTableWidgetItem()
-            check.setFlags(
-                Qt.ItemFlag.ItemIsEnabled
-                | Qt.ItemFlag.ItemIsSelectable
-                | Qt.ItemFlag.ItemIsUserCheckable
-            )
+            flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            if entry.status not in {ArchiveFolderStatus.DONE, ArchiveFolderStatus.SKIP}:
+                flags |= Qt.ItemFlag.ItemIsUserCheckable
+            check.setFlags(flags)
             check.setCheckState(Qt.CheckState.Unchecked)
             check.setData(Qt.ItemDataRole.UserRole, entry.path)
             self.table.setItem(row, 0, check)
@@ -447,6 +796,25 @@ class ArchiveMigrationPage(QWidget):
 
         self.table.setSortingEnabled(True)
         self.table.blockSignals(False)
+        self._apply_filters()
+
+    def _set_status_cell(self, path: str, status: str) -> None:
+        for row in range(self.table.rowCount()):
+            check = self.table.item(row, 0)
+            if check is None or str(check.data(Qt.ItemDataRole.UserRole) or "") != path:
+                continue
+            status_item = self.table.item(row, 4)
+            if status_item is not None:
+                status_item.setText(status)
+                status_item.setData(Qt.ItemDataRole.UserRole, status)
+            if status in {ArchiveFolderStatus.DONE.value, ArchiveFolderStatus.SKIP.value}:
+                check.setCheckState(Qt.CheckState.Unchecked)
+                check.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            return
+
+    def _refresh_status_cells(self) -> None:
+        for path, entry in self.state.folders.items():
+            self._set_status_cell(path, entry.status.value)
         self._apply_filters()
 
     def _apply_filters(self) -> None:
@@ -496,6 +864,8 @@ class ArchiveMigrationPage(QWidget):
         self.summary_label.setText(
             self._tr("selected", folders=folders, files=files, size=_format_bytes(size))
         )
+        queue_running = self._queue_thread is not None and self._queue_thread.isRunning()
+        self.queue_start_button.setEnabled(folders > 0 and not queue_running)
 
     def _update_root_files_label(self) -> None:
         if not hasattr(self, "root_files_label"):
