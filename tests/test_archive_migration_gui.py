@@ -18,10 +18,16 @@ def _state_for(tmp_path):
             root_path=str(tmp_path),
             folders=[
                 ArchiveFolderEntry(
-                    path=str(todo), name="Anapa", file_count=19, size_bytes=43 * 1024**2
+                    path=str(todo),
+                    name="Anapa",
+                    file_count=19,
+                    size_bytes=43 * 1024**2,
                 ),
                 ArchiveFolderEntry(
-                    path=str(done), name="Azov", file_count=131, size_bytes=313 * 1024**2
+                    path=str(done),
+                    name="Azov",
+                    file_count=131,
+                    size_bytes=313 * 1024**2,
                 ),
             ],
             root_file_count=2,
