@@ -4,7 +4,7 @@
 What does this PR change and why?
 
 ### User-visible changes
-- 
+-
 
 ### Testing
 - [ ] Unit tests added/updated where needed
@@ -30,7 +30,7 @@ What does this PR change and why?
 Что меняет этот PR и зачем?
 
 ### Изменения для пользователя
-- 
+-
 
 ### Проверка
 - [ ] При необходимости добавлены/обновлены unit tests
