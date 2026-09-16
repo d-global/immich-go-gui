@@ -89,7 +89,9 @@ def test_prepare_marks_selected_folders_ready_and_persists(tmp_path):
     )
     snapshots = []
 
-    prepare_archive_queue(state, items, persist=lambda current: snapshots.append(current.to_dict()))
+    prepare_archive_queue(
+        state, items, persist=lambda current: snapshots.append(current.to_dict())
+    )
 
     assert state.get(str(anapa)).status == ArchiveFolderStatus.READY
     assert state.get(str(azov)).status == ArchiveFolderStatus.READY
@@ -118,7 +120,7 @@ def test_sequential_queue_persists_done_after_every_folder(tmp_path):
     summary = run_archive_queue(
         state,
         items,
-        execute=lambda item: (executed.append(item.name) or _Result(True)),
+        execute=lambda item: executed.append(item.name) or _Result(True),
         persist=lambda current: persisted.append(current.to_dict()),
     )
 
