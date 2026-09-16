@@ -1,7 +1,7 @@
 ---
 name: Bug report / Сообщить об ошибке
 about: Report a bug / Сообщить об ошибке в Immich-Go GUI
- title: "[BUG] "
+title: "[BUG] "
 labels: bug
 assignees: ''
 ---
