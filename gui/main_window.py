@@ -44,6 +44,7 @@ from gui.mixins.persistence import PersistenceMixin
 from gui.mixins.profiles_ui import ProfilesUIMixin
 from gui.mixins.status import StatusMixin
 from gui.mixins.theme_mixin import ThemeMixin
+from gui.tabs.archive_migration_tab import build_archive_migration_tab
 from gui.tabs.config_tab import build_config_tab
 from gui.tabs.monitor_tab import build_monitor_tab
 from gui.tabs.stack_tab import build_stack_tab
@@ -82,6 +83,7 @@ class ImmichGoGUI(
         "archive",
         "stack",
         "monitor",
+        "archive-migration",
     ]
 
     def __init__(self):
@@ -140,12 +142,14 @@ class ImmichGoGUI(
         self.archive_page = self._build_archive_page()
         self.stack_tab = build_stack_tab(self)
         self.monitor_tab = build_monitor_tab(self)
+        self.archive_migration_tab = build_archive_migration_tab(self)
 
         self.stacked_widget.addWidget(self.config_tab)
         self.stacked_widget.addWidget(self.upload_page)
         self.stacked_widget.addWidget(self.archive_page)
         self.stacked_widget.addWidget(self.stack_tab)
         self.stacked_widget.addWidget(self.monitor_tab)
+        self.stacked_widget.addWidget(self.archive_migration_tab)
 
         self.stacked_widget.setCurrentIndex(0)
         self.update_header_crumb("configuration")
