@@ -37,11 +37,11 @@ _UPLOAD_TAB_KEYS = (
     "upload-immich",
 )
 _UPLOAD_CRUMBS = (
-    "upload \u00b7 from-folder",
-    "upload \u00b7 from-google-photos",
-    "upload \u00b7 from-icloud",
-    "upload \u00b7 from-picasa",
-    "upload \u00b7 from-immich",
+    "upload · from-folder",
+    "upload · from-google-photos",
+    "upload · from-icloud",
+    "upload · from-picasa",
+    "upload · from-immich",
 )
 _ARCHIVE_TAB_KEYS = (
     "archive-folder",
@@ -51,11 +51,11 @@ _ARCHIVE_TAB_KEYS = (
     "archive-immich",
 )
 _ARCHIVE_CRUMBS = (
-    "archive \u00b7 from-folder",
-    "archive \u00b7 from-google-photos",
-    "archive \u00b7 from-icloud",
-    "archive \u00b7 from-picasa",
-    "archive \u00b7 from-immich",
+    "archive · from-folder",
+    "archive · from-google-photos",
+    "archive · from-icloud",
+    "archive · from-picasa",
+    "archive · from-immich",
 )
 
 
@@ -66,6 +66,7 @@ class LayoutMixin:
         "archive",
         "stack",
         "monitor",
+        "archive-migration",
     ]
 
     def _get_active_tab_key(self) -> str:
@@ -82,6 +83,8 @@ class LayoutMixin:
             return "stack"
         if idx == 4:
             return "monitor"
+        if idx == 5:
+            return "archive-migration"
         return "config"
 
     def _build_upload_page(self):
@@ -165,6 +168,15 @@ class LayoutMixin:
         )
         sidebar_layout.addWidget(NavGroup("ARCHIVE", [self.btn_archive]))
 
+        self.btn_archive_migration = NavItem("Archive Migration · Миграция", None)
+        self.btn_archive_migration.icon_name = "sync"
+        self.btn_archive_migration.clicked.connect(
+            lambda: self.switch_tab(
+                5, "archive migration · миграция архива", self.btn_archive_migration
+            )
+        )
+        sidebar_layout.addWidget(NavGroup("MIGRATION", [self.btn_archive_migration]))
+
         self.btn_stack = NavItem("Stack Assets", None)
         self.btn_stack.icon_name = "layers"
         self.btn_stack.clicked.connect(
@@ -235,7 +247,7 @@ class LayoutMixin:
         footer_layout.setContentsMargins(24, 0, 24, 0)
 
         self.lbl_running_warning = QLabel(
-            "\u26a0\ufe0f Immich-Go is currently running in a terminal. "
+            "⚠️ Immich-Go is currently running in a terminal. "
             "Close the terminal to run another command."
         )
         self.lbl_running_warning.setObjectName("RunningWarning")
@@ -286,17 +298,22 @@ class LayoutMixin:
             crumb = _ARCHIVE_CRUMBS[min(a, len(_ARCHIVE_CRUMBS) - 1)]
         elif index == 4:
             crumb = "monitor"
+        elif index == 5:
+            crumb = "archive migration · миграция архива"
+            if hasattr(self, "archive_migration_tab"):
+                self.archive_migration_tab.reload_profile_state()
         self.update_header_crumb(crumb)
         for w in (
             self.btn_config,
             self.btn_upload,
             self.btn_archive,
+            self.btn_archive_migration,
             self.btn_stack,
             self.btn_monitor,
         ):
             w.setChecked(False)
         btn.setChecked(True)
-        self.footer.setVisible(index not in (0, 4))
+        self.footer.setVisible(index not in (0, 4, 5))
         tab_key = self._get_active_tab_key()
         if tab_key in self.inputs and "target-server" in self.inputs[tab_key]:
             srv_edit = self.inputs.get("config", {}).get("server")
