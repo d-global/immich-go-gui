@@ -40,7 +40,14 @@ jobs:
 
       - name: Build Windows standalone
         shell: bash
-        run: uv run --frozen python -m nuitka --output-filename=Immich-Go-GUI.exe app.py
+        run: |
+          APP_VERSION=$(uv run --frozen python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          NUMERIC_VERSION="${APP_VERSION}.0"
+          uv run --frozen python -m nuitka \
+            --output-filename=Immich-Go-GUI.exe \
+            --file-version="$NUMERIC_VERSION" \
+            --product-version="$NUMERIC_VERSION" \
+            app.py
 
       - name: Create portable archive
         shell: pwsh
