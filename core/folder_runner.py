@@ -31,6 +31,8 @@ class UploadResult:
     files_uploaded: int = 0
     files_skipped: int = 0
     files_errored: int = 0
+    assets_found: int = 0
+    album_added: int = 0
     duration_seconds: float = 0
 
     @property
@@ -228,6 +230,7 @@ def run_folder_upload(
     advanced_state: dict | None = None,
     skip_ssl: bool = False,
     client_timeout_minutes: int = 60,
+    prepared_plan=None,
 ) -> UploadResult:
     """Run immich-go upload for a single folder as a hidden subprocess.
 
@@ -236,13 +239,17 @@ def run_folder_upload(
         config: Monitor configuration.
         server_url: Immich server URL.
         api_key: Immich API key.
-        since_utc: Only upload files modified since this timestamp.
+        since_utc: Only upload files modified since this timestamp. Ignored when
+            ``prepared_plan`` is supplied.
         log_dir: Directory for log output.
         state: Shared runner state for pause/cancel coordination.
         on_log: Callback(folder_key, log_line) for live progress.
         advanced_state: Advanced upload-folder flag state.
         skip_ssl: Skip SSL verification (from application configuration).
         client_timeout_minutes: immich-go client timeout (from app config).
+        prepared_plan: Optional already validated CommandPlan. Archive Migration
+            uses this to reuse the same hidden runner while preserving its own
+            exact album/tag plan and avoiding Monitor's date-range behavior.
 
     Returns:
         UploadResult with success/failure details.
@@ -267,32 +274,46 @@ def run_folder_upload(
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
         log_handle = open(log_file, "w", encoding="utf-8")  # noqa: SIM115
         log_handle.write(f"Folder: {folder}\n")
-        log_handle.write(f"Since: {since_utc.isoformat()}\n\n")
+        if prepared_plan is None:
+            log_handle.write(f"Since: {since_utc.isoformat()}\n\n")
+        else:
+            log_handle.write("Mode: prepared command plan\n\n")
         log_handle.flush()
     except OSError:
         log_handle = None
 
     if on_log:
         on_log(folder_key, f"Starting upload: {folder}")
-        on_log(folder_key, f"  Since: {since_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        if prepared_plan is None:
+            on_log(
+                folder_key,
+                f"  Since: {since_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC",
+            )
+        else:
+            on_log(folder_key, "  Mode: prepared archive migration plan")
 
     try:
-        # Resolve immich-go binary via the binary manager (the installed
-        # build keeps it in BinaryManager's versioned directory).
-        binary = _resolve_binary_path()
+        if prepared_plan is None:
+            # Resolve immich-go binary via the binary manager (the installed
+            # build keeps it in BinaryManager's versioned directory).
+            binary = _resolve_binary_path()
 
-        # Build command (uses build_plan_from_state when advanced_state is set)
-        plan = _build_upload_plan(
-            folder,
-            config,
-            server_url,
-            api_key,
-            since_utc,
-            advanced_state,
-            binary_path=binary,
-            skip_ssl=skip_ssl,
-            client_timeout_minutes=client_timeout_minutes,
-        )
+            # Build command (uses build_plan_from_state when advanced_state is set)
+            plan = _build_upload_plan(
+                folder,
+                config,
+                server_url,
+                api_key,
+                since_utc,
+                advanced_state,
+                binary_path=binary,
+                skip_ssl=skip_ssl,
+                client_timeout_minutes=client_timeout_minutes,
+            )
+        else:
+            plan = prepared_plan
+            binary = plan.binary_path or _resolve_binary_path()
+
         if plan.errors:
             raise ValueError("Invalid upload command: " + "; ".join(plan.errors))
         args = plan.argv
@@ -580,6 +601,9 @@ def _tally_report_line(line: str, result: UploadResult) -> None:
         # The whole-run summary line can carry several fields at once, e.g.
         #   "Immich read 100%, Assets found: 8, Upload errors: 0, Uploaded 1"
         # so parse every field on the line rather than returning on the first.
+        m = re.search(r"Assets found:\s*(\d+)", line)
+        if m:
+            result.assets_found = int(m.group(1))
         m = re.search(r"[Uu]pload errors?:\s*(\d+)", line)
         if m:
             result.files_errored = int(m.group(1))
@@ -593,6 +617,9 @@ def _tally_report_line(line: str, result: UploadResult) -> None:
         m = re.search(r"server has duplicate\s*:?\s*(\d+)", line)
         if m:
             result.files_skipped = int(m.group(1))
+        m = re.search(r"added to album\s*:?\s*(\d+)", line, re.IGNORECASE)
+        if m:
+            result.album_added = int(m.group(1))
         # Regular per-file progress like "Uploading file=..." is ignored;
         # only the whole-run summary and report tallies are captured.
     except (ValueError, TypeError):

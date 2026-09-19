@@ -534,3 +534,64 @@ def test_linux_xdg_save_configuration_roundtrip(qapp, tmp_path, monkeypatch):
 
     cfg_path = profile_config_path("default")
     assert load_config(cfg_path).server_url == "http://linux-save-config:2283"
+
+
+def test_save_server_details_uses_selected_secret_provider(gui, monkeypatch):
+    calls = []
+
+    def fake_save_secret(**kwargs):
+        calls.append(kwargs)
+        return type(
+            "Result",
+            (),
+            {"message": "", "ok": True, "provider_used": kwargs["provider"]},
+        )()
+
+    monkeypatch.setattr(
+        "gui.mixins.persistence.save_secret_with_fallback", fake_save_secret
+    )
+    monkeypatch.setattr("gui.mixins.persistence.save_server_url", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "gui.mixins.persistence.load_config", lambda *a, **k: AppConfig()
+    )
+    monkeypatch.setattr("gui.mixins.persistence.save_config", lambda *a, **k: None)
+
+    gui.app_config.secrets_provider = "config"
+    combo = gui.inputs["config"]["secret_provider"]
+    combo.setCurrentIndex(combo.findData("keyring"))
+    gui.inputs["config"]["api_key"].setText("secret-key")
+
+    gui.save_server_details(show_popup=False)
+
+    assert calls[-1]["key"] == "api_key"
+    assert calls[-1]["provider"] == "keyring"
+    assert gui.app_config.secrets_provider == "keyring"
+
+
+def test_save_configuration_migrates_api_key_when_provider_changes(gui, monkeypatch):
+    calls = []
+
+    def fake_save_secret(**kwargs):
+        calls.append(kwargs)
+        return type(
+            "Result",
+            (),
+            {"message": "", "ok": True, "provider_used": kwargs["provider"]},
+        )()
+
+    monkeypatch.setattr("gui.mixins.persistence.save_config", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "gui.mixins.persistence.save_secret_with_fallback", fake_save_secret
+    )
+
+    gui.app_config.secrets_provider = "config"
+    combo = gui.inputs["config"]["secret_provider"]
+    combo.setCurrentIndex(combo.findData("keyring"))
+    gui.inputs["config"]["api_key"].setText("secret-key")
+
+    gui.save_configuration(show_popup=False)
+
+    api_calls = [call for call in calls if call["key"] == "api_key"]
+    assert api_calls
+    assert api_calls[-1]["provider"] == "keyring"
+    assert api_calls[-1]["value"] == "secret-key"
