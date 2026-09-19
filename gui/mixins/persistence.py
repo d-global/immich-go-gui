@@ -174,6 +174,7 @@ class PersistenceMixin:
         if provider not in {"keyring", "config"}:
             provider = getattr(self.app_config, "secrets_provider", "keyring")
         return provider if provider in {"keyring", "config"} else "keyring"
+
     def _mark_configuration_clean(self) -> None:
         self._config_clean_snapshot = self._collect_persisted_state()
 
