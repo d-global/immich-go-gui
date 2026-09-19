@@ -5,9 +5,11 @@ on:
     paths:
       - 'core/archive_migration.py'
       - 'core/archive_migration_queue.py'
+      - 'core/archive_migration_verify.py'
       - 'core/folder_runner.py'
       - 'gui/tabs/archive_migration_tab.py'
       - 'tests/test_archive_migration*.py'
+      - 'tests/test_folder_runner_tally.py'
       - '.github/workflows/archive-migration-windows-smoke.yml'
   workflow_dispatch:
 
@@ -33,7 +35,13 @@ jobs:
         run: uv sync --dev --frozen
 
       - name: Run archive migration tests
-        run: uv run --frozen pytest tests/test_archive_migration.py tests/test_archive_migration_queue.py tests/test_archive_migration_gui.py
+        run: >-
+          uv run --frozen pytest
+          tests/test_archive_migration.py
+          tests/test_archive_migration_queue.py
+          tests/test_archive_migration_verify.py
+          tests/test_archive_migration_gui.py
+          tests/test_folder_runner_tally.py
 
       - name: Self-test entrypoint
         run: uv run --frozen python app.py --self-test
