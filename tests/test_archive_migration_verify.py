@@ -92,7 +92,6 @@ def test_verify_archive_album_permission_failure(monkeypatch):
     assert "HTTP 403" in result.message
 
 
-
 def test_verify_archive_album_extra_assets_is_failure(monkeypatch):
     monkeypatch.setattr(
         "core.archive_migration_verify.requests.get",
