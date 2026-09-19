@@ -171,6 +171,16 @@ def test_archive_queue_runs_selected_folder_to_done(tmp_path, monkeypatch, qtbot
             files_uploaded=19,
             files_skipped=0,
             files_errored=0,
+            assets_found=19,
+            album_added=19,
+        ),
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.verify_archive_album",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            success=True,
+            message="Album verified: 19 assets (expected at least 19)",
+            actual_assets=19,
         ),
     )
 
