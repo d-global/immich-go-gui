@@ -200,3 +200,92 @@ def test_failed_upload_with_progress_becomes_partial(tmp_path):
 
     assert state.get(str(anapa)).status == ArchiveFolderStatus.PARTIAL
     assert summary.partial == 1
+
+
+
+@dataclass
+class _Verification:
+    success: bool
+    message: str = ""
+    actual_assets: int | None = None
+
+
+def test_successful_cli_run_requires_album_verification_before_done(tmp_path):
+    state, anapa, _ = _state(tmp_path)
+    items = build_archive_queue_items(
+        state,
+        [str(anapa)],
+        config_state=_config_state(),
+        binary_path="immich-go",
+    )
+    prepare_archive_queue(state, items)
+
+    summary = run_archive_queue(
+        state,
+        items,
+        execute=lambda _item: _Result(True),
+        verify=lambda _item, _result: _Verification(
+            False,
+            "Album verification failed: expected at least 19 assets, found 0",
+            actual_assets=0,
+        ),
+        persist=lambda _current: None,
+    )
+
+    entry = state.get(str(anapa))
+    assert entry.status == ArchiveFolderStatus.ERROR
+    assert "expected at least 19 assets, found 0" in (entry.last_error or "")
+    assert summary.done == 0
+    assert summary.errors == 1
+
+
+def test_verification_shortfall_with_progress_becomes_partial(tmp_path):
+    state, anapa, _ = _state(tmp_path)
+    items = build_archive_queue_items(
+        state,
+        [str(anapa)],
+        config_state=_config_state(),
+        binary_path="immich-go",
+    )
+    prepare_archive_queue(state, items)
+
+    summary = run_archive_queue(
+        state,
+        items,
+        execute=lambda _item: _Result(True, files_uploaded=3),
+        verify=lambda _item, _result: _Verification(
+            False,
+            "Album verification failed: expected at least 19 assets, found 3",
+            actual_assets=3,
+        ),
+        persist=lambda _current: None,
+    )
+
+    assert state.get(str(anapa)).status == ArchiveFolderStatus.PARTIAL
+    assert summary.partial == 1
+
+
+def test_verified_album_allows_done(tmp_path):
+    state, anapa, _ = _state(tmp_path)
+    items = build_archive_queue_items(
+        state,
+        [str(anapa)],
+        config_state=_config_state(),
+        binary_path="immich-go",
+    )
+    prepare_archive_queue(state, items)
+
+    summary = run_archive_queue(
+        state,
+        items,
+        execute=lambda _item: _Result(True),
+        verify=lambda _item, _result: _Verification(
+            True,
+            "Album verified: 19 assets",
+            actual_assets=19,
+        ),
+        persist=lambda _current: None,
+    )
+
+    assert state.get(str(anapa)).status == ArchiveFolderStatus.DONE
+    assert summary.done == 1
