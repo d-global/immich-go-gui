@@ -168,6 +168,13 @@ class PersistenceMixin:
             state["secrets_provider"] = "keyring"
         return state
 
+    def _selected_secret_provider(self) -> str:
+        widget = self.inputs.get("config", {}).get("secret_provider")
+        provider = widget.currentData() if widget is not None else None
+        if provider not in {"keyring", "config"}:
+            provider = getattr(self.app_config, "secrets_provider", "keyring")
+        return provider if provider in {"keyring", "config"} else "keyring"
+
     def _mark_configuration_clean(self) -> None:
         self._config_clean_snapshot = self._collect_persisted_state()
 
@@ -200,13 +207,30 @@ class PersistenceMixin:
             return
 
         prof_name = getattr(self.app_config, "profile_name", "default")
+        provider = self._selected_secret_provider()
+        if provider != self.app_config.secrets_provider:
+            # Save the provider together with the connection details so changing
+            # Local secrets file -> OS Keyring never requires a second save path.
+            try:
+                persisted = load_config(path=cfg_path, profile_name=prof_name)
+                persisted.secrets_provider = provider
+                save_config(persisted, path=cfg_path, profile_name=prof_name)
+                self.app_config.secrets_provider = provider
+            except OSError as exc:
+                QMessageBox.critical(
+                    cast(QWidget, self),
+                    "Save Failed",
+                    f"Could not save secret provider:\n{exc}",
+                )
+                return
+
         api_key = self.inputs["config"]["api_key"].text().strip()
         try:
             res_api = save_secret_with_fallback(
                 profile_name=prof_name,
                 key="api_key",
                 value=api_key,
-                provider=self.app_config.secrets_provider,
+                provider=provider,
             )
         except OSError as exc:
             QMessageBox.critical(
@@ -248,6 +272,7 @@ class PersistenceMixin:
 
     def save_configuration(self, show_popup: bool = True):
         prof_name = getattr(self.app_config, "profile_name", "default") or "default"
+        previous_provider = getattr(self.app_config, "secrets_provider", "keyring")
         # Server URL is track A; use the widget when that track is dirty, otherwise
         # keep the on-disk URL so app-settings-only saves cannot wipe credentials.
         if self.has_unsaved_server_details():
@@ -264,9 +289,7 @@ class PersistenceMixin:
             ].value()
 
         if "secret_provider" in self.inputs["config"]:
-            self.app_config.secrets_provider = self.inputs["config"][
-                "secret_provider"
-            ].currentData()
+            self.app_config.secrets_provider = self._selected_secret_provider()
 
         if "allow_untested_updates" in self.inputs["config"]:
             self.app_config.allow_untested_updates = self.inputs["config"][
@@ -296,11 +319,43 @@ class PersistenceMixin:
             return
 
         prof_name = getattr(self.app_config, "profile_name", "default")
+        provider_changed = self.app_config.secrets_provider != previous_provider
+        res_api = None
+        if provider_changed:
+            api_key = self.inputs["config"]["api_key"].text().strip()
+            if not api_key:
+                api_key = get_secret_with_fallback(
+                    profile_name=prof_name,
+                    key="api_key",
+                    provider=previous_provider,
+                )
+            if api_key:
+                try:
+                    res_api = save_secret_with_fallback(
+                        profile_name=prof_name,
+                        key="api_key",
+                        value=api_key,
+                        provider=self.app_config.secrets_provider,
+                    )
+                except OSError as exc:
+                    QMessageBox.critical(
+                        cast(QWidget, self),
+                        "Save Failed",
+                        f"Could not migrate API key:\n{exc}",
+                    )
+                    return
+
         admin_key = (
             self.inputs["config"]["admin_api_key"].text().strip()
             if "admin_api_key" in self.inputs["config"]
             else ""
         )
+        if provider_changed and not admin_key:
+            admin_key = get_secret_with_fallback(
+                profile_name=prof_name,
+                key="admin_api_key",
+                provider=previous_provider,
+            )
 
         try:
             res_admin = save_secret_with_fallback(
@@ -318,6 +373,8 @@ class PersistenceMixin:
             return
 
         msg = f"Configuration saved to:\n{cfg_path}"
+        if res_api is not None and res_api.message:
+            msg += f"\n\nNote (API Key): {res_api.message}"
         if res_admin.message:
             msg += f"\n\nNote (Admin Key): {res_admin.message}"
 

@@ -9,6 +9,11 @@
             background: transparent;
         }}
 
+        QWidget#ArchiveMigrationPage {{
+            background-color: {bg};
+            color: {text};
+        }}
+
 QToolTip {{
     background-color: {surface};
     color: {text};

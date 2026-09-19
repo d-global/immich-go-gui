@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import tarfile
+import time
 import zipfile
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -89,6 +90,40 @@ def parse_version_output(text: str) -> str:
         if match:
             return clean_version(match.group(1))
     return clean_version(lines[0])
+
+
+def _run_version_probe(binary_path: str, attempts: int = 3) -> tuple[str, str]:
+    """Run immich-go version with short retries for transient Windows locks."""
+
+    resolved_path = str(Path(binary_path).resolve())
+    creationflags = (
+        getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if sys.platform.startswith("win")
+        else 0
+    )
+    last_error = ""
+    for attempt in range(max(1, attempts)):
+        try:
+            res = subprocess.run(
+                [resolved_path, "version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+                creationflags=creationflags,
+            )
+            version_text = parse_version_output(res.stdout or res.stderr)
+            if version_text:
+                return version_text, ""
+            detail = (res.stderr or res.stdout or "").strip()
+            last_error = detail or f"version command exited with code {res.returncode}"
+        except Exception as exc:
+            last_error = str(exc) or exc.__class__.__name__
+
+        if attempt + 1 < max(1, attempts):
+            time.sleep(0.2 * (attempt + 1))
+
+    return "", last_error or "unknown version probe error"
 
 
 def get_version_support(version: str) -> VersionSupport:
@@ -266,28 +301,15 @@ class BinaryManager:
                     message="Binary exists but is not executable.",
                 )
 
-        try:
-            # Resolve the path to an absolute string before invoking subprocess.
-            # On Windows, unresolved relative paths or paths with mixed separators
-            # can fail silently even when the file exists.
-            resolved_path = str(Path(binary_path).resolve())
-            res = subprocess.run(
-                [resolved_path, "version"],
-                capture_output=True,
-                text=True,
-                timeout=3,
-                check=False,
-            )
-            version_text = parse_version_output(res.stdout or res.stderr)
-            if not version_text:
-                version_text = "Unknown"
-        except Exception as e:
+        version_text, probe_error = _run_version_probe(binary_path, attempts=3)
+        if not version_text:
+            detail = probe_error or "unknown error"
             return BinaryStatus(
                 state="warn",
                 card_text="Binary: Error",
-                version_text="Error running binary",
+                version_text=f"Error: {detail}",
                 support=VersionSupport.UNKNOWN,
-                message=f"Failed to execute binary version command: {e}",
+                message=f"Failed to execute binary version command: {detail}",
             )
 
         support = get_version_support(version_text)
@@ -504,13 +526,26 @@ class BinaryManager:
         return None
 
     def fetch_checksums(self, version: str) -> dict[str, str]:
-        """Fetch and parse checksums.txt for a release version."""
-        url = self.get_checksums_url(version)
-        if not url:
-            return {}
-        try:
-            res = requests.get(url, timeout=15)
-            res.raise_for_status()
+        """Fetch and parse checksums.txt, with a direct-release fallback."""
+        clean_v = clean_version(version)
+        urls: list[str] = []
+        api_url = self.get_checksums_url(clean_v)
+        if api_url:
+            urls.append(api_url)
+        direct_url = (
+            f"https://github.com/simulot/immich-go/releases/download/"
+            f"v{clean_v}/checksums.txt"
+        )
+        if direct_url not in urls:
+            urls.append(direct_url)
+
+        for url in urls:
+            try:
+                res = requests.get(url, timeout=15)
+                res.raise_for_status()
+            except Exception:
+                continue
+
             checksums: dict[str, str] = {}
             for line in res.text.splitlines():
                 line = line.strip()
@@ -519,9 +554,9 @@ class BinaryManager:
                 parts = line.split()
                 if len(parts) >= 2:
                     checksums[parts[-1]] = parts[0]
-            return checksums
-        except Exception:
-            return {}
+            if checksums:
+                return checksums
+        return {}
 
     def verify_archive_checksum(self, archive_path: str, expected_hash: str) -> bool:
         """Verify SHA256 of an archive file against an expected hex digest."""
@@ -584,20 +619,8 @@ class BinaryManager:
                 os.chmod(binary_path, 0o755)
             except OSError:
                 return False
-        try:
-            # Resolve the path before subprocess invocation (Windows robustness).
-            resolved_path = str(Path(binary_path).resolve())
-            res = subprocess.run(
-                [resolved_path, "version"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-            v_text = parse_version_output(res.stdout or res.stderr)
-            return bool(v_text)
-        except Exception:
-            return False
+        version_text, _error = _run_version_probe(binary_path, attempts=3)
+        return bool(version_text)
 
     def download_and_install(
         self,

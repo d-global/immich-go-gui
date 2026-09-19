@@ -1,0 +1,218 @@
+from types import SimpleNamespace
+
+from PySide6.QtCore import Qt
+
+from core.archive_migration import (
+    ArchiveFolderEntry,
+    ArchiveFolderStatus,
+    ArchiveMigrationState,
+    ArchiveScanResult,
+)
+from core.monitor_config import MonitorConfig
+from gui.tabs.archive_migration_tab import ArchiveMigrationPage, _format_bytes
+
+
+def _state_for(tmp_path):
+    todo = tmp_path / "Anapa"
+    done = tmp_path / "Azov"
+    todo.mkdir()
+    done.mkdir()
+    state = ArchiveMigrationState()
+    state.apply_scan(
+        ArchiveScanResult(
+            root_path=str(tmp_path),
+            folders=[
+                ArchiveFolderEntry(
+                    path=str(todo),
+                    name="Anapa",
+                    file_count=19,
+                    size_bytes=43 * 1024**2,
+                ),
+                ArchiveFolderEntry(
+                    path=str(done),
+                    name="Azov",
+                    file_count=131,
+                    size_bytes=313 * 1024**2,
+                ),
+            ],
+            root_file_count=2,
+            root_size_bytes=1024,
+        )
+    )
+    state.get(str(done)).status = ArchiveFolderStatus.DONE
+    return state
+
+
+def _row_for(page, name):
+    for row in range(page.table.rowCount()):
+        if page.table.item(row, 1).text() == name:
+            return row
+    raise AssertionError(f"row not found: {name}")
+
+
+def test_archive_migration_page_hides_done_by_default(tmp_path, monkeypatch, qtbot):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+
+    assert page.objectName() == "ArchiveMigrationPage"
+    assert page.testAttribute(Qt.WidgetAttribute.WA_StyledBackground) is True
+    assert page.table.rowCount() == 2
+    assert page.hide_done_check.isChecked() is True
+    visible_names = {
+        page.table.item(row, 1).text()
+        for row in range(page.table.rowCount())
+        if not page.table.isRowHidden(row)
+    }
+    assert visible_names == {"Anapa"}
+
+
+def test_archive_migration_page_can_show_done_and_switch_to_russian(
+    tmp_path, monkeypatch, qtbot
+):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+
+    page.hide_done_check.setChecked(False)
+    assert all(not page.table.isRowHidden(row) for row in range(page.table.rowCount()))
+
+    page.language_combo.setCurrentIndex(page.language_combo.findData("ru"))
+    assert page.scan_button.text() == "Сканировать"
+    assert page.choose_button.text() == "Выбрать папку"
+    assert page.queue_start_button.text() == "Загрузить выбранное"
+    assert page.queue_tag_label.text() == "Общий тег:"
+    assert (
+        page.queue_progress_label.text()
+        == "Выберите папки для подготовки очереди миграции."
+    )
+    assert page.table.horizontalHeaderItem(1).text() == "Папка"
+
+
+def test_archive_migration_table_numeric_sort(tmp_path, monkeypatch, qtbot):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+    page.hide_done_check.setChecked(False)
+    page.table.sortItems(2)
+
+    assert page.table.item(0, 2).text() == "19"
+    assert page.table.item(1, 2).text() == "131"
+
+
+def test_archive_queue_selection_enables_start_and_done_is_not_requeueable(
+    tmp_path, monkeypatch, qtbot
+):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+
+    assert page.queue_start_button.isEnabled() is False
+    anapa_row = _row_for(page, "Anapa")
+    page.table.item(anapa_row, 0).setCheckState(Qt.CheckState.Checked)
+    assert page.queue_start_button.isEnabled() is True
+
+    page.hide_done_check.setChecked(False)
+    azov_row = _row_for(page, "Azov")
+    azov_check = page.table.item(azov_row, 0)
+    assert not bool(azov_check.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+
+
+def test_archive_queue_runs_selected_folder_to_done(tmp_path, monkeypatch, qtbot):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.save",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.run_folder_upload",
+        lambda **_kwargs: SimpleNamespace(
+            success=True,
+            message="Completed",
+            files_uploaded=19,
+            files_skipped=0,
+            files_errored=0,
+        ),
+    )
+
+    class _BinaryManager:
+        def resolve_binary_path(self):
+            return "immich-go"
+
+    class _Host:
+        binary_manager = _BinaryManager()
+        monitor_config = MonitorConfig(log_dir=str(tmp_path / "logs"))
+
+        def _collect_config_state(self):
+            return {
+                "server": "http://immich.test:2283",
+                "api_key": "test-key",
+                "admin_api_key": "",
+                "skip-ssl": False,
+                "client_timeout_minutes": 60,
+            }
+
+        def _resolve_monitor_credentials(self):
+            return "http://immich.test:2283", "test-key"
+
+        def _collect_advanced_state(self, _tab_key):
+            return None
+
+    page = ArchiveMigrationPage(host=_Host())
+    qtbot.addWidget(page)
+    anapa_row = _row_for(page, "Anapa")
+    anapa_path = page.table.item(anapa_row, 0).data(Qt.ItemDataRole.UserRole)
+    page.table.item(anapa_row, 0).setCheckState(Qt.CheckState.Checked)
+
+    page.start_queue()
+    qtbot.waitUntil(lambda: page._queue_thread is None, timeout=3000)
+
+    assert state.get(str(anapa_path)).status == ArchiveFolderStatus.DONE
+    assert page.table.isRowHidden(_row_for(page, "Anapa")) is True
+    assert page.queue_progress_label.text().startswith("Queue complete:")
+    assert "Queue prepared: 1 folders" in page.queue_log.toPlainText()
+
+
+def test_format_bytes_is_human_readable():
+    assert _format_bytes(0) == "0 B"
+    assert _format_bytes(1024) == "1.00 KB"
+    assert _format_bytes(1024**3) == "1.00 GB"

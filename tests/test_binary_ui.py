@@ -367,3 +367,56 @@ def test_load_binary_metadata_migration_non_dict_record(tmp_path):
 
     # Verify non-dict entry was left as-is (not modified, no crash)
     assert result["versions"]["0.31.0"] == "some-string-value"
+
+
+def test_check_binary_retries_transient_probe_error(tmp_path):
+    bm = BinaryManager(base_dir=str(tmp_path), os_name="win32")
+    fake_bin = tmp_path / "0.32.0" / "immich-go.exe"
+    fake_bin.parent.mkdir(parents=True)
+    fake_bin.write_bytes(b"fake")
+    bm.select_version("0.32.0", str(fake_bin))
+    bm.resolve_binary_path = lambda _meta=None: str(fake_bin)
+
+    ok_result = MagicMock()
+    ok_result.stdout = "immich-go version:0.32.0"
+    ok_result.stderr = ""
+    ok_result.returncode = 0
+
+    with (
+        patch(
+            "core.binary_manager.subprocess.run",
+            side_effect=[OSError("temporarily locked"), ok_result],
+        ) as mock_run,
+        patch("core.binary_manager.time.sleep"),
+    ):
+        status = bm.check_binary()
+
+    assert mock_run.call_count == 2
+    assert status.state == "ok"
+    assert status.version_text == "0.32.0"
+
+
+def test_fetch_checksums_falls_back_to_direct_release_url(monkeypatch):
+    bm = BinaryManager()
+    monkeypatch.setattr(bm, "get_checksums_url", lambda _version: None)
+
+    class MockResponse:
+        text = "abc123  immich-go_0.32.0_Windows_x86_64.zip\n"
+
+        def raise_for_status(self):
+            return None
+
+    seen = []
+
+    def fake_get(url, timeout=15):
+        seen.append(url)
+        return MockResponse()
+
+    monkeypatch.setattr("core.binary_manager.requests.get", fake_get)
+
+    checksums = bm.fetch_checksums("0.32.0")
+
+    assert checksums["immich-go_0.32.0_Windows_x86_64.zip"] == "abc123"
+    assert seen == [
+        "https://github.com/simulot/immich-go/releases/download/v0.32.0/checksums.txt"
+    ]
