@@ -6,9 +6,9 @@ from core.archive_migration import (
     ArchiveFolderEntry,
     ArchiveFolderStatus,
     ArchiveMigrationState,
-    ArchiveScanResult,
     ArchiveMigrationStateStore,
     ArchiveScanCancelled,
+    ArchiveScanResult,
     scan_archive_root,
 )
 
