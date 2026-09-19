@@ -123,6 +123,27 @@ class ArchiveMigrationState:
         self.root_size_bytes = result.root_size_bytes
         self.folders = merged
 
+    def recover_interrupted_uploads(self) -> int:
+        """Convert stale UPLOADING entries into PARTIAL after an app restart.
+
+        A persisted UPLOADING state means the previous process stopped before it
+        could record a terminal result. Reclassifying it as PARTIAL makes the
+        folder visible and deliberately re-queueable instead of leaving it stuck
+        forever. We do not mark it ERROR because some assets may already have
+        reached Immich before the interruption.
+        """
+
+        recovered = 0
+        for entry in self.folders.values():
+            if entry.status != ArchiveFolderStatus.UPLOADING:
+                continue
+            entry.status = ArchiveFolderStatus.PARTIAL
+            entry.last_error = (
+                "Previous upload was interrupted before completion was recorded"
+            )
+            recovered += 1
+        return recovered
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
