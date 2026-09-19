@@ -85,6 +85,9 @@ _TRANSLATIONS = {
         "queue_tag_hint": "optional, e.g. cloud/krasnodar",
         "session_tag": "Add session tag",
         "stop_on_error": "Stop on first error",
+        "restore_trashed": "Restore matching duplicates from Immich trash",
+        "restore_trashed_tip": "Restores only trash assets whose SHA1 matches files in the selected source folder.",
+        "restore_trashed_enabled": "Targeted restore of matching trash duplicates is enabled.",
         "start_queue": "Upload selected",
         "cancel_queue": "Cancel queue",
         "queue_idle": "Select folders to prepare the migration queue.",
@@ -128,6 +131,9 @@ _TRANSLATIONS = {
         "queue_tag_hint": "необязательно, например cloud/krasnodar",
         "session_tag": "Добавить тег сессии",
         "stop_on_error": "Остановиться на первой ошибке",
+        "restore_trashed": "Восстанавливать найденные дубли из корзины",
+        "restore_trashed_tip": "Восстанавливаются только assets из корзины, SHA1 которых совпал с файлами выбранной исходной папки.",
+        "restore_trashed_enabled": "Включено точечное восстановление найденных дублей из корзины.",
         "start_queue": "Загрузить выбранное",
         "cancel_queue": "Остановить очередь",
         "queue_idle": "Выберите папки для подготовки очереди миграции.",
@@ -206,6 +212,7 @@ class _ArchiveQueueThread(QThread):
         log_dir: str,
         skip_ssl: bool,
         stop_on_error: bool,
+        restore_trashed: bool,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -218,6 +225,7 @@ class _ArchiveQueueThread(QThread):
         self.log_dir = log_dir
         self.skip_ssl = skip_ssl
         self.stop_on_error = stop_on_error
+        self.restore_trashed = restore_trashed
         self._cancel_event = threading.Event()
         self.runner_state = RunnerState()
 
@@ -297,6 +305,7 @@ class _ArchiveQueueThread(QThread):
             item.path,
             expected_assets,
             skip_ssl=self.skip_ssl,
+            restore_trashed=self.restore_trashed,
             cancel_event=self._cancel_event,
             on_log=lambda message: self.log_line.emit(item.name, message),
         )
@@ -500,6 +509,10 @@ class ArchiveMigrationPage(QWidget):
         queue_controls.addWidget(self.queue_cancel_button)
         queue_layout.addLayout(queue_controls)
 
+        self.restore_trashed_check = QCheckBox()
+        self.restore_trashed_check.setChecked(False)
+        queue_layout.addWidget(self.restore_trashed_check)
+
         self.queue_progress_label = QLabel()
         self.queue_progress_label.setObjectName("MutedText")
         queue_layout.addWidget(self.queue_progress_label)
@@ -583,6 +596,8 @@ class ArchiveMigrationPage(QWidget):
         self.queue_tag_edit.setPlaceholderText(self._tr("queue_tag_hint"))
         self.session_tag_check.setText(self._tr("session_tag"))
         self.stop_on_error_check.setText(self._tr("stop_on_error"))
+        self.restore_trashed_check.setText(self._tr("restore_trashed"))
+        self.restore_trashed_check.setToolTip(self._tr("restore_trashed_tip"))
         self.queue_start_button.setText(self._tr("start_queue"))
         self.queue_cancel_button.setText(self._tr("cancel_queue"))
         self.queue_log.setPlaceholderText(self._tr("queue_log"))
@@ -735,6 +750,7 @@ class ArchiveMigrationPage(QWidget):
                 tag=self.queue_tag_edit.text().strip(),
                 session_tag=self.session_tag_check.isChecked(),
                 stop_on_error=self.stop_on_error_check.isChecked(),
+                restore_trashed=self.restore_trashed_check.isChecked(),
             )
             items = build_archive_queue_items(
                 self.state,
@@ -769,6 +785,8 @@ class ArchiveMigrationPage(QWidget):
         self.queue_progress_bar.setValue(0)
         self.queue_progress_bar.setVisible(True)
         self._append_queue_log("", f"Queue prepared: {len(items)} folders")
+        if options.restore_trashed:
+            self._append_queue_log("", self._tr("restore_trashed_enabled"))
 
         thread = _ArchiveQueueThread(
             state=self.state,
@@ -780,6 +798,7 @@ class ArchiveMigrationPage(QWidget):
             log_dir=log_dir,
             skip_ssl=bool(config_state.get("skip-ssl", False)),
             stop_on_error=options.stop_on_error,
+            restore_trashed=options.restore_trashed,
             parent=self,
         )
         self._queue_thread = thread
@@ -807,6 +826,7 @@ class ArchiveMigrationPage(QWidget):
         self.queue_tag_edit.setEnabled(not running)
         self.session_tag_check.setEnabled(not running)
         self.stop_on_error_check.setEnabled(not running)
+        self.restore_trashed_check.setEnabled(not running)
         self.queue_cancel_button.setVisible(running)
         self.queue_cancel_button.setEnabled(running)
         if running:
