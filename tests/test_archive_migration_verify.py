@@ -49,9 +49,7 @@ def test_verify_archive_album_empty_is_failure(monkeypatch):
 
     assert result.success is False
     assert result.actual_assets == 0
-    assert result.message == (
-        "Album verification failed: expected at least 4 assets, found 0"
-    )
+    assert result.message == "Album verification failed: expected 4 assets, found 0"
 
 
 def test_verify_archive_album_rejects_ambiguous_name(monkeypatch):
@@ -92,3 +90,25 @@ def test_verify_archive_album_permission_failure(monkeypatch):
 
     assert result.success is False
     assert "HTTP 403" in result.message
+
+
+
+def test_verify_archive_album_extra_assets_is_failure(monkeypatch):
+    monkeypatch.setattr(
+        "core.archive_migration_verify.requests.get",
+        lambda *args, **kwargs: _Response(
+            200,
+            [{"id": "album-1", "albumName": "TEST_Anapa", "assetCount": 5}],
+        ),
+    )
+
+    result = verify_archive_album(
+        "http://immich.test:2283",
+        "secret",
+        "TEST_Anapa",
+        4,
+    )
+
+    assert result.success is False
+    assert result.actual_assets == 5
+    assert result.message == "Album verification failed: expected 4 assets, found 5"
