@@ -45,7 +45,11 @@ from core.archive_migration_queue import (
     prepare_archive_queue,
     run_archive_queue,
 )
-from core.archive_migration_verify import verify_archive_album
+from core.archive_migration_verify import (
+    AlbumVerificationResult,
+    repair_archive_album_membership,
+    verify_archive_album,
+)
 from core.config_manager import default_config_dir
 from core.folder_runner import RunnerState, run_folder_upload
 from core.monitor_config import MonitorConfig
@@ -240,20 +244,18 @@ class _ArchiveQueueThread(QThread):
         )
 
     def _verify(self, item, result):
-        expected_assets = int(getattr(result, "assets_found", 0) or 0)
-        if expected_assets <= 0:
-            expected_assets = int(getattr(result, "files_uploaded", 0) or 0) + int(
-                getattr(result, "files_skipped", 0) or 0
-            )
+        processed_assets = int(getattr(result, "files_uploaded", 0) or 0) + int(
+            getattr(result, "files_skipped", 0) or 0
+        )
+        expected_assets = processed_assets or int(
+            getattr(result, "assets_found", 0) or 0
+        )
         if expected_assets <= 0:
             expected_assets = item.file_count
 
         self.log_line.emit(
             item.name,
-            (
-                "Verifying target album on Immich "
-                f"(expected at least {expected_assets} assets)"
-            ),
+            f"Verifying target album on Immich (expected {expected_assets} assets)",
         )
         verification = verify_archive_album(
             self.server_url,
@@ -273,7 +275,61 @@ class _ArchiveQueueThread(QThread):
             ),
         )
         self.log_line.emit(item.name, verification.message)
-        return verification
+
+        can_repair = (
+            not verification.success
+            and verification.album_id is not None
+            and isinstance(verification.actual_assets, int)
+            and verification.actual_assets < expected_assets
+            and not self._cancel_event.is_set()
+        )
+        if not can_repair:
+            return verification
+
+        self.log_line.emit(
+            item.name,
+            "Album is under-filled; starting targeted membership repair",
+        )
+        repair = repair_archive_album_membership(
+            self.server_url,
+            self.api_key,
+            verification.album_id,
+            item.path,
+            expected_assets,
+            skip_ssl=self.skip_ssl,
+            cancel_event=self._cancel_event,
+            on_log=lambda message: self.log_line.emit(item.name, message),
+        )
+        self.log_line.emit(item.name, repair.message)
+        for detail in repair.details:
+            self.log_line.emit(item.name, f"Repair detail: {detail}")
+
+        final = verify_archive_album(
+            self.server_url,
+            self.api_key,
+            item.album_name,
+            expected_assets,
+            skip_ssl=self.skip_ssl,
+        )
+        self.log_line.emit(item.name, f"Post-repair: {final.message}")
+        if final.success:
+            return final
+
+        message = final.message
+        if repair.blocked_assets:
+            message += (
+                f"; {repair.blocked_assets} assets were rejected with no_permission"
+            )
+        if repair.trashed_assets:
+            message += f"; {repair.trashed_assets} assets are in trash"
+        return AlbumVerificationResult(
+            success=False,
+            album_name=final.album_name,
+            expected_assets=final.expected_assets,
+            actual_assets=final.actual_assets,
+            album_id=final.album_id,
+            message=message,
+        )
 
     def run(self) -> None:
         self.runner_state.reset()
