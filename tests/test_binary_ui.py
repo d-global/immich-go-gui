@@ -375,6 +375,7 @@ def test_check_binary_retries_transient_probe_error(tmp_path):
     fake_bin.parent.mkdir(parents=True)
     fake_bin.write_bytes(b"fake")
     bm.select_version("0.32.0", str(fake_bin))
+    bm.resolve_binary_path = lambda _meta=None: str(fake_bin)
 
     ok_result = MagicMock()
     ok_result.stdout = "immich-go version:0.32.0"
