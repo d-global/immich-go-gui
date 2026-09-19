@@ -74,7 +74,9 @@ class QueueVerificationResult(Protocol):
 
 
 QueueExecutor = Callable[[ArchiveQueueItem], QueueExecutionResult]
-QueueVerifier = Callable[[ArchiveQueueItem, QueueExecutionResult], QueueVerificationResult]
+QueueVerifier = Callable[
+    [ArchiveQueueItem, QueueExecutionResult], QueueVerificationResult
+]
 QueuePersist = Callable[[ArchiveMigrationState], None]
 QueueProgress = Callable[[int, int, ArchiveQueueItem, str], None]
 
@@ -247,9 +249,7 @@ def run_archive_queue(
         summary.not_started -= 1
         summary.processed_paths.append(item.path)
 
-        item_success = result.success and (
-            verification is None or verification.success
-        )
+        item_success = result.success and (verification is None or verification.success)
         if item_success:
             entry.status = ArchiveFolderStatus.DONE
             entry.last_error = None
@@ -267,21 +267,15 @@ def run_archive_queue(
                 and isinstance(expected_assets, int)
                 and actual_assets > expected_assets
             )
-            has_partial_progress = (
-                not count_is_over
-                and (
-                    getattr(result, "files_uploaded", 0) > 0
-                    or count_is_short
-                )
+            has_partial_progress = not count_is_over and (
+                getattr(result, "files_uploaded", 0) > 0 or count_is_short
             )
             entry.status = (
                 ArchiveFolderStatus.PARTIAL
                 if has_partial_progress
                 else ArchiveFolderStatus.ERROR
             )
-            entry.last_error = (
-                verification.message or "Album verification failed"
-            )
+            entry.last_error = verification.message or "Album verification failed"
             if entry.status == ArchiveFolderStatus.PARTIAL:
                 summary.partial += 1
             else:
