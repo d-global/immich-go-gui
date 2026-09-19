@@ -261,3 +261,94 @@ def test_repair_does_not_add_trashed_assets(tmp_path, monkeypatch):
     assert result.trashed_assets == 1
     assert put_called is False
     assert "trash" in result.details[0].lower()
+
+
+def test_repair_can_restore_only_checksum_matched_trashed_assets(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "trashed.jpg").write_bytes(b"trashed")
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs["json"]))
+        if url.endswith("/api/assets/bulk-upload-check"):
+            return _Response(
+                200,
+                {
+                    "results": [
+                        {
+                            "id": "trashed.jpg",
+                            "action": "reject",
+                            "reason": "duplicate",
+                            "assetId": "asset-trash",
+                            "isTrashed": True,
+                        }
+                    ]
+                },
+            )
+        if url.endswith("/api/trash/restore/assets"):
+            assert kwargs["json"] == {"ids": ["asset-trash"]}
+            return _Response(200, {"count": 1})
+        raise AssertionError(url)
+
+    def fake_put(_url, **kwargs):
+        assert kwargs["json"] == {"ids": ["asset-trash"]}
+        return _Response(200, [{"id": "asset-trash", "success": True}])
+
+    monkeypatch.setattr("core.archive_migration_verify.requests.post", fake_post)
+    monkeypatch.setattr("core.archive_migration_verify.requests.put", fake_put)
+
+    result = repair_archive_album_membership(
+        "http://immich.test:2283",
+        "secret",
+        "album-1",
+        str(tmp_path),
+        1,
+        restore_trashed=True,
+    )
+
+    assert result.success is True
+    assert result.trashed_assets == 0
+    assert result.restored_assets == 1
+    assert result.added_assets == 1
+    assert any("restored from Immich trash" in detail for detail in result.details)
+    assert len(calls) == 2
+
+
+def test_repair_reports_missing_delete_permission_for_targeted_restore(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "trashed.jpg").write_bytes(b"trashed")
+
+    def fake_post(url, **_kwargs):
+        if url.endswith("/api/assets/bulk-upload-check"):
+            return _Response(
+                200,
+                {
+                    "results": [
+                        {
+                            "id": "trashed.jpg",
+                            "action": "reject",
+                            "reason": "duplicate",
+                            "assetId": "asset-trash",
+                            "isTrashed": True,
+                        }
+                    ]
+                },
+            )
+        return _Response(403, {})
+
+    monkeypatch.setattr("core.archive_migration_verify.requests.post", fake_post)
+
+    result = repair_archive_album_membership(
+        "http://immich.test:2283",
+        "secret",
+        "album-1",
+        str(tmp_path),
+        1,
+        restore_trashed=True,
+    )
+
+    assert result.success is False
+    assert result.trashed_assets == 1
+    assert "asset.delete permission" in result.message
