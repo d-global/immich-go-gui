@@ -64,7 +64,16 @@ class QueueExecutionResult(Protocol):
     files_uploaded: int
 
 
+class QueueVerificationResult(Protocol):
+    """Server-side verification result for a completed queue item."""
+
+    success: bool
+    message: str
+    actual_assets: int | None
+
+
 QueueExecutor = Callable[[ArchiveQueueItem], QueueExecutionResult]
+QueueVerifier = Callable[[ArchiveQueueItem, QueueExecutionResult], QueueVerificationResult]
 QueuePersist = Callable[[ArchiveMigrationState], None]
 QueueProgress = Callable[[int, int, ArchiveQueueItem, str], None]
 
@@ -179,6 +188,7 @@ def run_archive_queue(
     *,
     execute: QueueExecutor,
     persist: QueuePersist,
+    verify: QueueVerifier | None = None,
     stop_on_error: bool = True,
     cancel_event: threading.Event | None = None,
     on_progress: QueueProgress | None = None,
@@ -224,13 +234,42 @@ def run_archive_queue(
         except Exception as exc:
             result = _FailedExecutionResult(str(exc))
 
+        verification = None
+        if result.success and verify is not None:
+            try:
+                verification = verify(item, result)
+            except Exception as exc:
+                verification = _FailedVerificationResult(
+                    f"Album verification failed: {exc}"
+                )
+
         summary.not_started -= 1
         summary.processed_paths.append(item.path)
 
-        if result.success:
+        item_success = result.success and (
+            verification is None or verification.success
+        )
+        if item_success:
             entry.status = ArchiveFolderStatus.DONE
             entry.last_error = None
             summary.done += 1
+        elif result.success and verification is not None:
+            actual_assets = getattr(verification, "actual_assets", None)
+            has_partial_progress = getattr(result, "files_uploaded", 0) > 0 or (
+                isinstance(actual_assets, int) and actual_assets > 0
+            )
+            entry.status = (
+                ArchiveFolderStatus.PARTIAL
+                if has_partial_progress
+                else ArchiveFolderStatus.ERROR
+            )
+            entry.last_error = (
+                verification.message or "Album verification failed"
+            )
+            if entry.status == ArchiveFolderStatus.PARTIAL:
+                summary.partial += 1
+            else:
+                summary.errors += 1
         elif getattr(result, "files_uploaded", 0) > 0:
             entry.status = ArchiveFolderStatus.PARTIAL
             entry.last_error = result.message or "Upload stopped after partial progress"
@@ -244,7 +283,7 @@ def run_archive_queue(
         if on_progress is not None:
             on_progress(index, len(items), item, entry.status.value)
 
-        if not result.success and stop_on_error:
+        if not item_success and stop_on_error:
             break
 
     if cancel_event is not None and cancel_event.is_set():
@@ -287,3 +326,10 @@ class _FailedExecutionResult:
     message: str
     success: bool = False
     files_uploaded: int = 0
+
+
+@dataclass
+class _FailedVerificationResult:
+    message: str
+    success: bool = False
+    actual_assets: int | None = None
