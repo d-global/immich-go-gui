@@ -266,6 +266,11 @@ class ArchiveMigrationPage(QWidget):
     def __init__(self, host=None, parent: QWidget | None = None):
         super().__init__(parent)
         self.setObjectName("ArchiveMigrationPage")
+        # Custom QWidget subclasses do not reliably paint a stylesheet background
+        # unless WA_StyledBackground is enabled. Without it, the page stays
+        # transparent and exposes the native QStackedWidget backing surface on
+        # Windows (black in the System/light theme).
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.host = host
         self.profile_name = active_profile_name()
         self.state = ArchiveMigrationStateStore.load(self.profile_name)
