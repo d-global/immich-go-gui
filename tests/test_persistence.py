@@ -541,11 +541,19 @@ def test_save_server_details_uses_selected_secret_provider(gui, monkeypatch):
 
     def fake_save_secret(**kwargs):
         calls.append(kwargs)
-        return type("Result", (), {"message": "", "ok": True, "provider_used": kwargs["provider"]})()
+        return type(
+            "Result",
+            (),
+            {"message": "", "ok": True, "provider_used": kwargs["provider"]},
+        )()
 
-    monkeypatch.setattr("gui.mixins.persistence.save_secret_with_fallback", fake_save_secret)
+    monkeypatch.setattr(
+        "gui.mixins.persistence.save_secret_with_fallback", fake_save_secret
+    )
     monkeypatch.setattr("gui.mixins.persistence.save_server_url", lambda *a, **k: None)
-    monkeypatch.setattr("gui.mixins.persistence.load_config", lambda *a, **k: AppConfig())
+    monkeypatch.setattr(
+        "gui.mixins.persistence.load_config", lambda *a, **k: AppConfig()
+    )
     monkeypatch.setattr("gui.mixins.persistence.save_config", lambda *a, **k: None)
 
     gui.app_config.secrets_provider = "config"
@@ -565,10 +573,16 @@ def test_save_configuration_migrates_api_key_when_provider_changes(gui, monkeypa
 
     def fake_save_secret(**kwargs):
         calls.append(kwargs)
-        return type("Result", (), {"message": "", "ok": True, "provider_used": kwargs["provider"]})()
+        return type(
+            "Result",
+            (),
+            {"message": "", "ok": True, "provider_used": kwargs["provider"]},
+        )()
 
     monkeypatch.setattr("gui.mixins.persistence.save_config", lambda *a, **k: None)
-    monkeypatch.setattr("gui.mixins.persistence.save_secret_with_fallback", fake_save_secret)
+    monkeypatch.setattr(
+        "gui.mixins.persistence.save_secret_with_fallback", fake_save_secret
+    )
 
     gui.app_config.secrets_provider = "config"
     combo = gui.inputs["config"]["secret_provider"]
