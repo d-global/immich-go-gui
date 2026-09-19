@@ -219,11 +219,17 @@ def repair_archive_album_membership(
     folder = Path(source_folder)
     expected = max(0, int(expected_assets))
     if not clean_url:
-        return AlbumRepairResult(False, False, message="Repair skipped: server URL is empty")
+        return AlbumRepairResult(
+            False, False, message="Repair skipped: server URL is empty"
+        )
     if not api_key:
-        return AlbumRepairResult(False, False, message="Repair skipped: API key is empty")
+        return AlbumRepairResult(
+            False, False, message="Repair skipped: API key is empty"
+        )
     if not album_id:
-        return AlbumRepairResult(False, False, message="Repair skipped: album ID is empty")
+        return AlbumRepairResult(
+            False, False, message="Repair skipped: album ID is empty"
+        )
     if not folder.is_dir():
         return AlbumRepairResult(
             False,
@@ -240,7 +246,7 @@ def repair_archive_album_membership(
     scanned_files = 0
 
     try:
-        for path in sorted(folder.rglob("*")):
+        for path in folder.rglob("*"):
             if cancel_event is not None and cancel_event.is_set():
                 return AlbumRepairResult(
                     True,
