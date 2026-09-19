@@ -53,6 +53,8 @@ State is profile-scoped in `archive_migration_state.json`, next to the existing 
 
 Archive Migration does not trust an immich-go exit code or its `added to album` event counter as proof of album membership. After every successful CLI run it independently queries Immich, resolves one exact-name destination album, and requires `assetCount` to exactly match the processed asset count before persisting `DONE`. Missing, ambiguous, unreadable, empty, short, or overfull target albums remain retryable as `ERROR` or `PARTIAL`.
 
+If an otherwise successful run leaves the target album under-filled, Archive Migration performs one targeted repair pass. It hashes the source files with SHA1, resolves existing same-user assets through Immich's official `POST /api/assets/bulk-upload-check`, and retries only album membership through `PUT /api/albums/{id}/assets`. The per-asset response is inspected: `duplicate` means the asset is already in the album, while `no_permission` is reported with the source filename instead of being silently accepted. Trashed assets are never restored automatically, and the repair pass never changes visibility or metadata.
+
 State schema v2 introduced this completion rule. A `DONE` entry persisted by schema v1 is reopened as `PARTIAL` on load because that older state predates server-side completion verification.
 
 ## UX target
