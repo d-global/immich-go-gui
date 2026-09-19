@@ -8,7 +8,8 @@ Immich API before a queue item can become DONE.
 If verification finds an under-filled album after a successful immich-go run,
 a repair pass can resolve the source files to existing Immich asset IDs through
 the official bulk-upload-check endpoint and retry only album membership. This
-fallback never changes asset visibility, trash state, or metadata.
+fallback never changes asset visibility or metadata. Trashed checksum matches
+stay untouched unless the operator explicitly enables targeted trash restore.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ class AlbumRepairResult:
     already_present: int = 0
     blocked_assets: int = 0
     trashed_assets: int = 0
+    restored_assets: int = 0
     message: str = ""
     details: tuple[str, ...] = ()
 
@@ -202,6 +204,7 @@ def repair_archive_album_membership(
     skip_ssl: bool = False,
     timeout: float = 30.0,
     batch_size: int = 200,
+    restore_trashed: bool = False,
     cancel_event: Event | None = None,
     on_log: RepairLog | None = None,
 ) -> AlbumRepairResult:
@@ -211,8 +214,11 @@ def repair_archive_album_membership(
     existing asset ID for duplicates owned by the authenticated user. We use
     that official lookup only after normal completion verification failed.
 
-    Assets reported as trashed are not modified. Per-asset `no_permission`
-    responses are surfaced explicitly instead of being treated as success.
+    Assets reported as trashed are not modified by default. If
+    `restore_trashed` is explicitly enabled, only checksum-matched assets from
+    this source folder are restored through Immich's targeted trash endpoint.
+    Per-asset `no_permission` responses are surfaced explicitly instead of
+    being treated as success.
     """
 
     clean_url = normalize_server_url(server_url)
@@ -311,8 +317,97 @@ def repair_archive_album_membership(
             details=tuple(details),
         )
 
-    for asset_id, relative in trashed.items():
-        details.append(f"{relative}: existing Immich asset is in trash; repair skipped")
+    restored_assets = 0
+    if trashed and restore_trashed:
+        _emit(
+            on_log,
+            f"Album repair: restoring {len(trashed)} checksum-matched assets from trash",
+        )
+        try:
+            restore_response = requests.post(
+                f"{clean_url}/api/trash/restore/assets",
+                headers=_headers(api_key),
+                json={"ids": list(trashed)},
+                verify=not skip_ssl,
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            return AlbumRepairResult(
+                True,
+                False,
+                scanned_files=scanned_files,
+                resolved_assets=len(resolved),
+                trashed_assets=len(trashed),
+                message=f"Album repair trash restore failed: {exc}",
+                details=tuple(details),
+            )
+
+        if restore_response.status_code in (401, 403):
+            return AlbumRepairResult(
+                True,
+                False,
+                scanned_files=scanned_files,
+                resolved_assets=len(resolved),
+                trashed_assets=len(trashed),
+                message=(
+                    f"Album repair trash restore failed: HTTP "
+                    f"{restore_response.status_code}. The API key needs "
+                    "asset.delete permission to restore matched assets."
+                ),
+                details=tuple(details),
+            )
+        if restore_response.status_code != 200:
+            return AlbumRepairResult(
+                True,
+                False,
+                scanned_files=scanned_files,
+                resolved_assets=len(resolved),
+                trashed_assets=len(trashed),
+                message=(
+                    "Album repair trash restore failed: Immich returned HTTP "
+                    f"{restore_response.status_code}"
+                ),
+                details=tuple(details),
+            )
+
+        try:
+            restore_payload = restore_response.json()
+            restored_assets = int(restore_payload.get("count", 0))
+        except (AttributeError, TypeError, ValueError):
+            return AlbumRepairResult(
+                True,
+                False,
+                scanned_files=scanned_files,
+                resolved_assets=len(resolved),
+                trashed_assets=len(trashed),
+                message="Album repair trash restore failed: invalid response",
+                details=tuple(details),
+            )
+
+        if restored_assets != len(trashed):
+            return AlbumRepairResult(
+                True,
+                False,
+                scanned_files=scanned_files,
+                resolved_assets=len(resolved),
+                trashed_assets=len(trashed),
+                restored_assets=restored_assets,
+                message=(
+                    f"Album repair trash restore mismatch: requested "
+                    f"{len(trashed)}, restored {restored_assets}"
+                ),
+                details=tuple(details),
+            )
+
+        for asset_id, relative in trashed.items():
+            resolved.setdefault(asset_id, relative)
+            details.append(f"{relative}: restored from Immich trash")
+        trashed.clear()
+    else:
+        for _asset_id, relative in trashed.items():
+            details.append(
+                f"{relative}: existing Immich asset is in trash; repair skipped"
+            )
 
     ids_to_add = list(resolved)
     if not ids_to_add:
@@ -432,7 +527,7 @@ def repair_archive_album_membership(
     message = (
         f"Album repair: resolved {len(resolved)} assets; "
         f"added {added}; already present {already}; "
-        f"blocked {blocked}; trashed {len(trashed)}"
+        f"blocked {blocked}; trashed {len(trashed)}; restored {restored_assets}"
     )
     return AlbumRepairResult(
         attempted=True,
@@ -443,6 +538,7 @@ def repair_archive_album_membership(
         already_present=already,
         blocked_assets=blocked,
         trashed_assets=len(trashed),
+        restored_assets=restored_assets,
         message=message,
         details=tuple(details),
     )
