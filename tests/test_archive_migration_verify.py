@@ -1,4 +1,7 @@
-from core.archive_migration_verify import verify_archive_album
+from core.archive_migration_verify import (
+    repair_archive_album_membership,
+    verify_archive_album,
+)
 
 
 class _Response:
@@ -8,6 +11,10 @@ class _Response:
 
     def json(self):
         return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
 
 
 def test_verify_archive_album_success(monkeypatch):
@@ -111,3 +118,152 @@ def test_verify_archive_album_extra_assets_is_failure(monkeypatch):
     assert result.success is False
     assert result.actual_assets == 5
     assert result.message == "Album verification failed: expected 4 assets, found 5"
+
+
+def test_repair_resolves_checksums_and_adds_missing_assets(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "old.jpg").write_bytes(b"old")
+    (tmp_path / "new.jpg").write_bytes(b"new")
+    (tmp_path / "note.xmp").write_bytes(b"sidecar")
+
+    def fake_post(_url, **kwargs):
+        results = []
+        for item in kwargs["json"]["assets"]:
+            if item["id"].endswith(".jpg"):
+                asset_id = "asset-old" if item["id"] == "old.jpg" else "asset-new"
+                results.append(
+                    {
+                        "id": item["id"],
+                        "action": "reject",
+                        "reason": "duplicate",
+                        "assetId": asset_id,
+                        "isTrashed": False,
+                    }
+                )
+            else:
+                results.append({"id": item["id"], "action": "accept"})
+        return _Response(200, {"results": results})
+
+    def fake_put(_url, **kwargs):
+        assert set(kwargs["json"]["ids"]) == {"asset-old", "asset-new"}
+        return _Response(
+            200,
+            [
+                {"id": "asset-old", "success": True},
+                {"id": "asset-new", "success": False, "error": "duplicate"},
+            ],
+        )
+
+    monkeypatch.setattr(
+        "core.archive_migration_verify.requests.post", fake_post
+    )
+    monkeypatch.setattr(
+        "core.archive_migration_verify.requests.put", fake_put
+    )
+
+    result = repair_archive_album_membership(
+        "http://immich.test:2283",
+        "secret",
+        "album-1",
+        str(tmp_path),
+        2,
+    )
+
+    assert result.attempted is True
+    assert result.success is True
+    assert result.resolved_assets == 2
+    assert result.added_assets == 1
+    assert result.already_present == 1
+    assert result.blocked_assets == 0
+
+
+def test_repair_surfaces_no_permission_per_file(tmp_path, monkeypatch):
+    (tmp_path / "locked.jpg").write_bytes(b"locked")
+
+    monkeypatch.setattr(
+        "core.archive_migration_verify.requests.post",
+        lambda *_args, **_kwargs: _Response(
+            200,
+            {
+                "results": [
+                    {
+                        "id": "locked.jpg",
+                        "action": "reject",
+                        "reason": "duplicate",
+                        "assetId": "asset-locked",
+                        "isTrashed": False,
+                    }
+                ]
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "core.archive_migration_verify.requests.put",
+        lambda *_args, **_kwargs: _Response(
+            200,
+            [
+                {
+                    "id": "asset-locked",
+                    "success": False,
+                    "error": "no_permission",
+                }
+            ],
+        ),
+    )
+
+    result = repair_archive_album_membership(
+        "http://immich.test:2283",
+        "secret",
+        "album-1",
+        str(tmp_path),
+        1,
+    )
+
+    assert result.success is False
+    assert result.blocked_assets == 1
+    assert "locked.jpg" in result.details[0]
+    assert "LOCKED" in result.details[0]
+
+
+def test_repair_does_not_add_trashed_assets(tmp_path, monkeypatch):
+    (tmp_path / "trashed.jpg").write_bytes(b"trashed")
+    put_called = False
+
+    monkeypatch.setattr(
+        "core.archive_migration_verify.requests.post",
+        lambda *_args, **_kwargs: _Response(
+            200,
+            {
+                "results": [
+                    {
+                        "id": "trashed.jpg",
+                        "action": "reject",
+                        "reason": "duplicate",
+                        "assetId": "asset-trash",
+                        "isTrashed": True,
+                    }
+                ]
+            },
+        ),
+    )
+
+    def fake_put(*_args, **_kwargs):
+        nonlocal put_called
+        put_called = True
+        return _Response(200, [])
+
+    monkeypatch.setattr("core.archive_migration_verify.requests.put", fake_put)
+
+    result = repair_archive_album_membership(
+        "http://immich.test:2283",
+        "secret",
+        "album-1",
+        str(tmp_path),
+        1,
+    )
+
+    assert result.success is False
+    assert result.trashed_assets == 1
+    assert put_called is False
+    assert "trash" in result.details[0].lower()
