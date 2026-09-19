@@ -62,8 +62,32 @@ def test_queue_plan_reuses_upload_folder_and_maps_folder_to_album(tmp_path):
     assert "--tag=cloud/krasnodar" in argv
     assert "--session-tag" in argv
     assert "--no-ui" in argv
+    assert "--recursive" in argv
     assert str(anapa) == argv[-1]
     assert not any(arg.startswith("--date-range") for arg in argv)
+
+
+def test_queue_does_not_inherit_upload_folder_advanced_filters(tmp_path):
+    state, anapa, _ = _state(tmp_path)
+
+    items = build_archive_queue_items(
+        state,
+        [str(anapa)],
+        config_state=_config_state(),
+        binary_path="immich-go",
+        base_advanced_state={
+            "date-range": {"enabled": True, "value": "2020-01-01,2020-01-31"},
+            "exclude-ext": {"enabled": True, "value": ".jpg"},
+            "overwrite": {"enabled": True, "value": True},
+            "recursive": {"enabled": True, "value": False},
+        },
+    )
+
+    argv = items[0].plan.argv
+    assert "--recursive" in argv
+    assert not any(arg.startswith("--date-range") for arg in argv)
+    assert not any(arg.startswith("--exclude-extensions") for arg in argv)
+    assert "--overwrite" not in argv
 
 
 def test_queue_rejects_done_folder(tmp_path):
