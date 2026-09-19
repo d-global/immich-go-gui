@@ -125,6 +125,7 @@ def _run_version_probe(binary_path: str, attempts: int = 3) -> tuple[str, str]:
 
     return "", last_error or "unknown version probe error"
 
+
 def get_version_support(version: str) -> VersionSupport:
     """Return support classification for a given version string."""
     cleaned = clean_version(version)
