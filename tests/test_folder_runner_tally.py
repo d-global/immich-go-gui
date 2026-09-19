@@ -8,7 +8,9 @@ def test_tally_parses_archive_verification_diagnostics():
         "Immich read 100%, Assets found: 4, Upload errors: 0, Uploaded 0",
         result,
     )
-    _tally_report_line("server has duplicate               :       4  (459.8 KB)", result)
+    _tally_report_line(
+        "server has duplicate               :       4  (459.8 KB)", result
+    )
     _tally_report_line("added to album                     :       4", result)
 
     assert result.assets_found == 4
