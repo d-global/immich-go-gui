@@ -454,6 +454,8 @@ class ArchiveMigrationPage(QWidget):
             return
         self.profile_name = profile_name
         self.state = ArchiveMigrationStateStore.load(self.profile_name)
+        if self.state.recover_interrupted_uploads():
+            ArchiveMigrationStateStore.save(self.state, self.profile_name)
         self._load_state_into_ui()
 
     def _on_language_changed(self) -> None:
