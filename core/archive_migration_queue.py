@@ -265,10 +265,16 @@ def _merged_advanced_state(
     tag: str,
     session_tag: bool,
 ) -> dict[str, Any]:
-    merged: dict[str, Any] = {}
-    if isinstance(base, dict):
-        for key, value in base.items():
-            merged[key] = dict(value) if isinstance(value, dict) else value
+    # Archive Migration has its own deliberately small policy surface. Do not
+    # inherit arbitrary Upload Folder advanced settings (date ranges, extension
+    # filters, overwrite, ban-file, etc.) from another workflow: doing so could
+    # silently skip or alter archive content. The base argument remains in the
+    # signature for compatibility with the GUI caller but is intentionally ignored.
+    _ = base
+    merged: dict[str, Any] = {
+        # One first-level queue item must include all nested folders.
+        "recursive": {"enabled": True, "value": True},
+    }
 
     clean_tag = tag.strip()
     merged["tag"] = {"enabled": bool(clean_tag), "value": clean_tag}
