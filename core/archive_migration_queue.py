@@ -70,6 +70,7 @@ class QueueVerificationResult(Protocol):
     success: bool
     message: str
     actual_assets: int | None
+    expected_assets: int
 
 
 QueueExecutor = Callable[[ArchiveQueueItem], QueueExecutionResult]
@@ -255,8 +256,23 @@ def run_archive_queue(
             summary.done += 1
         elif result.success and verification is not None:
             actual_assets = getattr(verification, "actual_assets", None)
-            has_partial_progress = getattr(result, "files_uploaded", 0) > 0 or (
-                isinstance(actual_assets, int) and actual_assets > 0
+            expected_assets = getattr(verification, "expected_assets", None)
+            count_is_short = (
+                isinstance(actual_assets, int)
+                and isinstance(expected_assets, int)
+                and 0 < actual_assets < expected_assets
+            )
+            count_is_over = (
+                isinstance(actual_assets, int)
+                and isinstance(expected_assets, int)
+                and actual_assets > expected_assets
+            )
+            has_partial_progress = (
+                not count_is_over
+                and (
+                    getattr(result, "files_uploaded", 0) > 0
+                    or count_is_short
+                )
             )
             entry.status = (
                 ArchiveFolderStatus.PARTIAL
@@ -333,3 +349,4 @@ class _FailedVerificationResult:
     message: str
     success: bool = False
     actual_assets: int | None = None
+    expected_assets: int = 0
