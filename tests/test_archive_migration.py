@@ -3,8 +3,10 @@ import threading
 import pytest
 
 from core.archive_migration import (
+    ArchiveFolderEntry,
     ArchiveFolderStatus,
     ArchiveMigrationState,
+    ArchiveScanResult,
     ArchiveMigrationStateStore,
     ArchiveScanCancelled,
     scan_archive_root,
