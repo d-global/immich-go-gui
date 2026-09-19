@@ -179,7 +179,6 @@ def test_recover_interrupted_uploads_marks_partial(tmp_path):
     assert state.recover_interrupted_uploads() == 0
 
 
-
 def test_schema_v1_done_is_reopened_for_server_verification():
     state = ArchiveMigrationState.from_dict(
         {
