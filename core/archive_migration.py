@@ -22,6 +22,9 @@ from typing import Any
 from .config_manager import _atomic_write_text, default_config_path
 
 
+CURRENT_ARCHIVE_MIGRATION_SCHEMA = 2
+
+
 class ArchiveFolderStatus(str, Enum):
     """Persistent lifecycle for a first-level archive folder."""
 
@@ -91,7 +94,7 @@ class ArchiveScanResult:
 class ArchiveMigrationState:
     """Persistent archive migration state for the active profile."""
 
-    schema_version: int = 1
+    schema_version: int = CURRENT_ARCHIVE_MIGRATION_SCHEMA
     root_path: str = ""
     folders: dict[str, ArchiveFolderEntry] = field(default_factory=dict)
     root_file_count: int = 0
@@ -157,8 +160,11 @@ class ArchiveMigrationState:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ArchiveMigrationState:
+        source_schema = (
+            _coerce_non_negative_int(data.get("schema_version", 1)) or 1
+        )
         state = cls(
-            schema_version=_coerce_non_negative_int(data.get("schema_version", 1)) or 1,
+            schema_version=max(source_schema, CURRENT_ARCHIVE_MIGRATION_SCHEMA),
             root_path=str(data.get("root_path", "")),
             root_file_count=_coerce_non_negative_int(data.get("root_file_count", 0)),
             root_size_bytes=_coerce_non_negative_int(data.get("root_size_bytes", 0)),
@@ -169,6 +175,15 @@ class ArchiveMigrationState:
                 if not isinstance(value, dict):
                     continue
                 entry = ArchiveFolderEntry.from_dict(value)
+                if (
+                    source_schema < CURRENT_ARCHIVE_MIGRATION_SCHEMA
+                    and entry.status == ArchiveFolderStatus.DONE
+                ):
+                    entry.status = ArchiveFolderStatus.PARTIAL
+                    entry.last_error = (
+                        "Completion was recorded before server-side album "
+                        "verification was available"
+                    )
                 if entry.path:
                     state.folders[_path_key(entry.path)] = entry
         return state
