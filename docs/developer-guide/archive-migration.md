@@ -42,14 +42,18 @@ Each first-level folder has one of these states:
 - `TODO` — discovered, not prepared;
 - `READY` — selected/prepared for upload;
 - `UPLOADING` — active run;
-- `DONE` — completed successfully;
-- `PARTIAL` — upload needs operator review;
-- `ERROR` — failed;
+- `DONE` — immich-go completed and the target Immich album was verified server-side with exactly the expected asset count;
+- `PARTIAL` — processing made progress, but server-side album verification did not fully match;
+- `ERROR` — upload or server-side album verification failed;
 - `SKIP` — intentionally excluded.
 
 A rescan refreshes file counts and sizes while preserving the lifecycle state for the same folder path.
 
 State is profile-scoped in `archive_migration_state.json`, next to the existing profile configuration files.
+
+Archive Migration does not trust an immich-go exit code or its `added to album` event counter as proof of album membership. After every successful CLI run it independently queries Immich, resolves one exact-name destination album, and requires `assetCount` to exactly match the processed asset count before persisting `DONE`. Missing, ambiguous, unreadable, empty, short, or overfull target albums remain retryable as `ERROR` or `PARTIAL`.
+
+State schema v2 introduced this completion rule. A `DONE` entry persisted by schema v1 is reopened as `PARTIAL` on load because that older state predates server-side completion verification.
 
 ## UX target
 
@@ -63,7 +67,8 @@ The eventual page is a workbench, not a wizard:
 6. set a shared tag and queue options;
 7. run sequential uploads, one folder at a time;
 8. map each selected first-level folder to an Immich album with that folder's name;
-9. persist `DONE/ERROR/PARTIAL` after every folder, not only at the end of the batch.
+9. verify the destination album on the Immich server after a successful CLI run;
+10. persist `DONE/ERROR/PARTIAL` after every folder, not only at the end of the batch.
 
 The UI should expose current folder, queue position, progress, and the relevant log without making the user hunt through unrelated tabs.
 
