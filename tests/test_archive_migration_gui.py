@@ -99,6 +99,11 @@ def test_archive_migration_page_can_show_done_and_switch_to_russian(
     assert page.queue_start_button.text() == "Загрузить выбранное"
     assert page.queue_tag_label.text() == "Общий тег:"
     assert (
+        page.restore_trashed_check.text()
+        == "Восстанавливать найденные дубли из корзины"
+    )
+    assert page.restore_trashed_check.isChecked() is False
+    assert (
         page.queue_progress_label.text()
         == "Выберите папки для подготовки очереди миграции."
     )
