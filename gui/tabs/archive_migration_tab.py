@@ -269,6 +269,8 @@ class ArchiveMigrationPage(QWidget):
         self.host = host
         self.profile_name = active_profile_name()
         self.state = ArchiveMigrationStateStore.load(self.profile_name)
+        if self.state.recover_interrupted_uploads():
+            ArchiveMigrationStateStore.save(self.state, self.profile_name)
         self._scan_thread: _ArchiveScanThread | None = None
         self._queue_thread: _ArchiveQueueThread | None = None
         self._language = self._load_language()
