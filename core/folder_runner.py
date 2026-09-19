@@ -31,6 +31,8 @@ class UploadResult:
     files_uploaded: int = 0
     files_skipped: int = 0
     files_errored: int = 0
+    assets_found: int = 0
+    album_added: int = 0
     duration_seconds: float = 0
 
     @property
@@ -599,6 +601,9 @@ def _tally_report_line(line: str, result: UploadResult) -> None:
         # The whole-run summary line can carry several fields at once, e.g.
         #   "Immich read 100%, Assets found: 8, Upload errors: 0, Uploaded 1"
         # so parse every field on the line rather than returning on the first.
+        m = re.search(r"Assets found:\s*(\d+)", line)
+        if m:
+            result.assets_found = int(m.group(1))
         m = re.search(r"[Uu]pload errors?:\s*(\d+)", line)
         if m:
             result.files_errored = int(m.group(1))
@@ -612,6 +617,9 @@ def _tally_report_line(line: str, result: UploadResult) -> None:
         m = re.search(r"server has duplicate\s*:?\s*(\d+)", line)
         if m:
             result.files_skipped = int(m.group(1))
+        m = re.search(r"added to album\s*:?\s*(\d+)", line, re.IGNORECASE)
+        if m:
+            result.album_added = int(m.group(1))
         # Regular per-file progress like "Uploading file=..." is ignored;
         # only the whole-run summary and report tallies are captured.
     except (ValueError, TypeError):
