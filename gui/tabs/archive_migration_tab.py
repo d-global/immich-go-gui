@@ -496,7 +496,7 @@ class ArchiveMigrationPage(QWidget):
         self._update_selection_summary()
         if not self.root_edit.text().strip() and not self._scan_thread:
             self.progress_label.setText(self._tr("no_root"))
-        if self._queue_thread is None and not self.queue_progress_label.text().strip():
+        if self._queue_thread is None and not self.queue_progress_bar.isVisible():
             self.queue_progress_label.setText(self._tr("queue_idle"))
 
     def _choose_root(self) -> None:
