@@ -202,7 +202,6 @@ def test_failed_upload_with_progress_becomes_partial(tmp_path):
     assert summary.partial == 1
 
 
-
 @dataclass
 class _Verification:
     success: bool
@@ -290,7 +289,6 @@ def test_verified_album_allows_done(tmp_path):
 
     assert state.get(str(anapa)).status == ArchiveFolderStatus.DONE
     assert summary.done == 1
-
 
 
 def test_verification_extra_album_assets_is_error_not_partial(tmp_path):
