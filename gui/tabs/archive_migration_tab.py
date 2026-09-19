@@ -265,6 +265,7 @@ class ArchiveMigrationPage(QWidget):
 
     def __init__(self, host=None, parent: QWidget | None = None):
         super().__init__(parent)
+        self.setObjectName("ArchiveMigrationPage")
         self.host = host
         self.profile_name = active_profile_name()
         self.state = ArchiveMigrationStateStore.load(self.profile_name)
