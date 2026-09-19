@@ -208,6 +208,7 @@ class _Verification:
     success: bool
     message: str = ""
     actual_assets: int | None = None
+    expected_assets: int = 19
 
 
 def test_successful_cli_run_requires_album_verification_before_done(tmp_path):
@@ -289,3 +290,32 @@ def test_verified_album_allows_done(tmp_path):
 
     assert state.get(str(anapa)).status == ArchiveFolderStatus.DONE
     assert summary.done == 1
+
+
+
+def test_verification_extra_album_assets_is_error_not_partial(tmp_path):
+    state, anapa, _ = _state(tmp_path)
+    items = build_archive_queue_items(
+        state,
+        [str(anapa)],
+        config_state=_config_state(),
+        binary_path="immich-go",
+    )
+    prepare_archive_queue(state, items)
+
+    summary = run_archive_queue(
+        state,
+        items,
+        execute=lambda _item: _Result(True, files_uploaded=3),
+        verify=lambda _item, _result: _Verification(
+            False,
+            "Album verification failed: expected 19 assets, found 20",
+            actual_assets=20,
+            expected_assets=19,
+        ),
+        persist=lambda _current: None,
+    )
+
+    assert state.get(str(anapa)).status == ArchiveFolderStatus.ERROR
+    assert summary.errors == 1
+    assert summary.partial == 0
