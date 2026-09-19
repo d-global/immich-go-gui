@@ -97,6 +97,7 @@ def test_archive_migration_page_can_show_done_and_switch_to_russian(
     assert page.choose_button.text() == "Выбрать папку"
     assert page.queue_start_button.text() == "Загрузить выбранное"
     assert page.queue_tag_label.text() == "Общий тег:"
+    assert page.queue_progress_label.text() == "Выберите папки для подготовки очереди миграции."
     assert page.table.horizontalHeaderItem(1).text() == "Папка"
 
 
