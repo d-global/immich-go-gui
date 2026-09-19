@@ -36,7 +36,7 @@ def verify_archive_album(
     skip_ssl: bool = False,
     timeout: float = 15.0,
 ) -> AlbumVerificationResult:
-    """Verify that the exact target album exists and contains expected assets.
+    """Verify that the exact target album exists and contains exactly the expected number of assets.
 
     The list-albums endpoint is intentionally used without version-specific
     query parameters so the check stays compatible across Immich V2/V3. An
@@ -148,7 +148,7 @@ def verify_archive_album(
             ),
         )
 
-    if actual < expected:
+    if actual != expected:
         return AlbumVerificationResult(
             success=False,
             album_name=album_name,
@@ -156,7 +156,7 @@ def verify_archive_album(
             actual_assets=actual,
             album_id=album_id,
             message=(
-                "Album verification failed: expected at least "
+                "Album verification failed: expected "
                 f"{expected} assets, found {actual}"
             ),
         )
@@ -167,7 +167,7 @@ def verify_archive_album(
         expected_assets=expected,
         actual_assets=actual,
         album_id=album_id,
-        message=f"Album verified: {actual} assets (expected at least {expected})",
+        message=f"Album verified: {actual} assets",
     )
 
 
