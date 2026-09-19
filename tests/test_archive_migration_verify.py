@@ -263,9 +263,7 @@ def test_repair_does_not_add_trashed_assets(tmp_path, monkeypatch):
     assert "trash" in result.details[0].lower()
 
 
-def test_repair_can_restore_only_checksum_matched_trashed_assets(
-    tmp_path, monkeypatch
-):
+def test_repair_can_restore_only_checksum_matched_trashed_assets(tmp_path, monkeypatch):
     (tmp_path / "trashed.jpg").write_bytes(b"trashed")
     calls = []
 
