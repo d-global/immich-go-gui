@@ -29,6 +29,7 @@ class ArchiveQueueOptions:
     tag: str = ""
     session_tag: bool = True
     stop_on_error: bool = True
+    restore_trashed: bool = False
 
 
 @dataclass
