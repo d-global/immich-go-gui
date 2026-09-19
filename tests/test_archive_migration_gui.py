@@ -63,6 +63,7 @@ def test_archive_migration_page_hides_done_by_default(tmp_path, monkeypatch, qtb
     page = ArchiveMigrationPage()
     qtbot.addWidget(page)
 
+    assert page.objectName() == "ArchiveMigrationPage"
     assert page.table.rowCount() == 2
     assert page.hide_done_check.isChecked() is True
     visible_names = {
