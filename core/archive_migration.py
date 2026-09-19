@@ -21,7 +21,6 @@ from typing import Any
 
 from .config_manager import _atomic_write_text, default_config_path
 
-
 CURRENT_ARCHIVE_MIGRATION_SCHEMA = 2
 
 
@@ -160,9 +159,7 @@ class ArchiveMigrationState:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ArchiveMigrationState:
-        source_schema = (
-            _coerce_non_negative_int(data.get("schema_version", 1)) or 1
-        )
+        source_schema = _coerce_non_negative_int(data.get("schema_version", 1)) or 1
         state = cls(
             schema_version=max(source_schema, CURRENT_ARCHIVE_MIGRATION_SCHEMA),
             root_path=str(data.get("root_path", "")),
