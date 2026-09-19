@@ -156,8 +156,7 @@ def verify_archive_album(
             actual_assets=actual,
             album_id=album_id,
             message=(
-                "Album verification failed: expected "
-                f"{expected} assets, found {actual}"
+                f"Album verification failed: expected {expected} assets, found {actual}"
             ),
         )
 
