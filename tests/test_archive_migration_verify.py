@@ -120,9 +120,7 @@ def test_verify_archive_album_extra_assets_is_failure(monkeypatch):
     assert result.message == "Album verification failed: expected 4 assets, found 5"
 
 
-def test_repair_resolves_checksums_and_adds_missing_assets(
-    tmp_path, monkeypatch
-):
+def test_repair_resolves_checksums_and_adds_missing_assets(tmp_path, monkeypatch):
     (tmp_path / "old.jpg").write_bytes(b"old")
     (tmp_path / "new.jpg").write_bytes(b"new")
     (tmp_path / "note.xmp").write_bytes(b"sidecar")
@@ -155,12 +153,8 @@ def test_repair_resolves_checksums_and_adds_missing_assets(
             ],
         )
 
-    monkeypatch.setattr(
-        "core.archive_migration_verify.requests.post", fake_post
-    )
-    monkeypatch.setattr(
-        "core.archive_migration_verify.requests.put", fake_put
-    )
+    monkeypatch.setattr("core.archive_migration_verify.requests.post", fake_post)
+    monkeypatch.setattr("core.archive_migration_verify.requests.put", fake_put)
 
     result = repair_archive_album_membership(
         "http://immich.test:2283",
