@@ -45,6 +45,7 @@ from core.archive_migration_queue import (
     prepare_archive_queue,
     run_archive_queue,
 )
+from core.archive_migration_verify import verify_archive_album
 from core.config_manager import default_config_dir
 from core.folder_runner import RunnerState, run_folder_upload
 from core.monitor_config import MonitorConfig
@@ -199,6 +200,7 @@ class _ArchiveQueueThread(QThread):
         server_url: str,
         api_key: str,
         log_dir: str,
+        skip_ssl: bool,
         stop_on_error: bool,
         parent: QWidget | None = None,
     ):
@@ -210,6 +212,7 @@ class _ArchiveQueueThread(QThread):
         self.server_url = server_url
         self.api_key = api_key
         self.log_dir = log_dir
+        self.skip_ssl = skip_ssl
         self.stop_on_error = stop_on_error
         self._cancel_event = threading.Event()
         self.runner_state = RunnerState()
@@ -236,6 +239,42 @@ class _ArchiveQueueThread(QThread):
             prepared_plan=item.plan,
         )
 
+    def _verify(self, item, result):
+        expected_assets = int(getattr(result, "assets_found", 0) or 0)
+        if expected_assets <= 0:
+            expected_assets = int(getattr(result, "files_uploaded", 0) or 0) + int(
+                getattr(result, "files_skipped", 0) or 0
+            )
+        if expected_assets <= 0:
+            expected_assets = item.file_count
+
+        self.log_line.emit(
+            item.name,
+            (
+                "Verifying target album on Immich "
+                f"(expected at least {expected_assets} assets)"
+            ),
+        )
+        verification = verify_archive_album(
+            self.server_url,
+            self.api_key,
+            item.album_name,
+            expected_assets,
+            skip_ssl=self.skip_ssl,
+        )
+        self.log_line.emit(
+            item.name,
+            (
+                "immich-go report: "
+                f"assets found {getattr(result, 'assets_found', 0)}, "
+                f"uploaded {getattr(result, 'files_uploaded', 0)}, "
+                f"server duplicates {getattr(result, 'files_skipped', 0)}, "
+                f"reported added to album {getattr(result, 'album_added', 0)}"
+            ),
+        )
+        self.log_line.emit(item.name, verification.message)
+        return verification
+
     def run(self) -> None:
         self.runner_state.reset()
         self.runner_state.set_total_folders(len(self.items))
@@ -245,6 +284,7 @@ class _ArchiveQueueThread(QThread):
                 self.items,
                 execute=self._execute,
                 persist=self._persist,
+                verify=self._verify,
                 stop_on_error=self.stop_on_error,
                 cancel_event=self._cancel_event,
                 on_progress=lambda index, total, item, status: self.progress.emit(
@@ -682,6 +722,7 @@ class ArchiveMigrationPage(QWidget):
             server_url=server_url,
             api_key=api_key,
             log_dir=log_dir,
+            skip_ssl=bool(config_state.get("skip-ssl", False)),
             stop_on_error=options.stop_on_error,
             parent=self,
         )
