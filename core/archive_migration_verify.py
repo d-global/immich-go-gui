@@ -404,7 +404,7 @@ def repair_archive_album_membership(
             details.append(f"{relative}: restored from Immich trash")
         trashed.clear()
     else:
-        for _asset_id, relative in trashed.items():
+        for relative in trashed.values():
             details.append(
                 f"{relative}: existing Immich asset is in trash; repair skipped"
             )
