@@ -177,3 +177,46 @@ def test_recover_interrupted_uploads_marks_partial(tmp_path):
     assert entry.status == ArchiveFolderStatus.PARTIAL
     assert "interrupted" in (entry.last_error or "").lower()
     assert state.recover_interrupted_uploads() == 0
+
+
+
+def test_schema_v1_done_is_reopened_for_server_verification():
+    state = ArchiveMigrationState.from_dict(
+        {
+            "schema_version": 1,
+            "folders": {
+                "x": {
+                    "path": "C:/Archive/TEST_Anapa",
+                    "name": "TEST_Anapa",
+                    "file_count": 4,
+                    "status": "DONE",
+                }
+            },
+        }
+    )
+
+    entry = state.get("C:/Archive/TEST_Anapa")
+    assert state.schema_version == 2
+    assert entry is not None
+    assert entry.status == ArchiveFolderStatus.PARTIAL
+    assert "server-side album verification" in (entry.last_error or "")
+
+
+def test_schema_v2_done_remains_done():
+    state = ArchiveMigrationState.from_dict(
+        {
+            "schema_version": 2,
+            "folders": {
+                "x": {
+                    "path": "C:/Archive/Verified",
+                    "name": "Verified",
+                    "file_count": 4,
+                    "status": "DONE",
+                }
+            },
+        }
+    )
+
+    entry = state.get("C:/Archive/Verified")
+    assert entry is not None
+    assert entry.status == ArchiveFolderStatus.DONE
