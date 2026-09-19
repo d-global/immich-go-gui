@@ -154,3 +154,24 @@ def test_unknown_persisted_status_falls_back_to_todo():
     entry = state.get("C:/Archive/Test")
     assert entry is not None
     assert entry.status == ArchiveFolderStatus.TODO
+
+
+def test_recover_interrupted_uploads_marks_partial(tmp_path):
+    folder = tmp_path / "Interrupted"
+    folder.mkdir()
+    state = ArchiveMigrationState()
+    state.apply_scan(
+        ArchiveScanResult(
+            root_path=str(tmp_path),
+            folders=[ArchiveFolderEntry(path=str(folder), name="Interrupted")],
+        )
+    )
+    entry = state.get(str(folder))
+    entry.status = ArchiveFolderStatus.UPLOADING
+
+    recovered = state.recover_interrupted_uploads()
+
+    assert recovered == 1
+    assert entry.status == ArchiveFolderStatus.PARTIAL
+    assert "interrupted" in (entry.last_error or "").lower()
+    assert state.recover_interrupted_uploads() == 0
