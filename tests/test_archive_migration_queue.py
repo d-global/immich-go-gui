@@ -1,5 +1,5 @@
-from dataclasses import dataclass
 import threading
+from dataclasses import dataclass
 
 import pytest
 
@@ -318,7 +318,6 @@ def test_verification_extra_album_assets_is_error_not_partial(tmp_path):
     assert state.get(str(anapa)).status == ArchiveFolderStatus.ERROR
     assert summary.errors == 1
     assert summary.partial == 0
-
 
 
 def test_cancelled_current_folder_becomes_partial_not_error(tmp_path):
