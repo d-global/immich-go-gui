@@ -231,3 +231,93 @@ def test_format_bytes_is_human_readable():
     assert _format_bytes(0) == "0 B"
     assert _format_bytes(1024) == "1.00 KB"
     assert _format_bytes(1024**3) == "1.00 GB"
+
+
+
+def test_archive_migration_select_all_uses_corner_checkbox(
+    tmp_path, monkeypatch, qtbot
+):
+    state = _state_for(tmp_path)
+    extra = tmp_path / "Gelendzhik"
+    extra.mkdir()
+    state.folders[str(extra).lower()] = ArchiveFolderEntry(
+        path=str(extra),
+        name="Gelendzhik",
+        file_count=7,
+        size_bytes=5 * 1024**2,
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+
+    assert page.table.cornerWidget() is page.select_all_check
+    assert page.select_all_check.checkState() == Qt.CheckState.Unchecked
+
+    page.select_all_check.click()
+
+    assert page.select_all_check.checkState() == Qt.CheckState.Checked
+    assert page.table.item(_row_for(page, "Anapa"), 0).checkState() == Qt.CheckState.Checked
+    assert (
+        page.table.item(_row_for(page, "Gelendzhik"), 0).checkState()
+        == Qt.CheckState.Checked
+    )
+    assert page.queue_start_button.isEnabled() is True
+
+    page.hide_done_check.setChecked(False)
+    azov_item = page.table.item(_row_for(page, "Azov"), 0)
+    assert not bool(azov_item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+    assert azov_item.checkState() == Qt.CheckState.Unchecked
+
+
+def test_archive_migration_select_all_respects_filter_and_partial_state(
+    tmp_path, monkeypatch, qtbot
+):
+    state = _state_for(tmp_path)
+    extra = tmp_path / "Gelendzhik"
+    extra.mkdir()
+    state.folders[str(extra).lower()] = ArchiveFolderEntry(
+        path=str(extra),
+        name="Gelendzhik",
+        file_count=7,
+        size_bytes=5 * 1024**2,
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+
+    page.search_edit.setText("Anapa")
+    page.select_all_check.click()
+
+    assert page.table.item(_row_for(page, "Anapa"), 0).checkState() == Qt.CheckState.Checked
+    assert (
+        page.table.item(_row_for(page, "Gelendzhik"), 0).checkState()
+        == Qt.CheckState.Unchecked
+    )
+
+    page.search_edit.clear()
+    assert page.select_all_check.checkState() == Qt.CheckState.PartiallyChecked
+
+    page.select_all_check.click()
+    assert page.select_all_check.checkState() == Qt.CheckState.Checked
+    assert (
+        page.table.item(_row_for(page, "Gelendzhik"), 0).checkState()
+        == Qt.CheckState.Checked
+    )
+
+    page.select_all_check.click()
+    assert page.select_all_check.checkState() == Qt.CheckState.Unchecked
+    assert page.selected_folder_paths() == []
