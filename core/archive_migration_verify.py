@@ -50,6 +50,25 @@ class AlbumRepairResult:
     blocked_assets: int = 0
     trashed_assets: int = 0
     restored_assets: int = 0
+    resolved_asset_ids: tuple[str, ...] = ()
+    message: str = ""
+    details: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class AlbumSyncResult:
+    """Result of reconciling one Immich album to the canonical source folder."""
+
+    attempted: bool
+    success: bool
+    source_assets: int = 0
+    album_assets_before: int = 0
+    extras_found: int = 0
+    removed_from_album: int = 0
+    trash_candidates: int = 0
+    trashed_assets: int = 0
+    preserved_in_other_albums: int = 0
+    album_assets_after: int | None = None
     message: str = ""
     details: tuple[str, ...] = ()
 
@@ -238,6 +257,377 @@ def finalize_archive_album_verification(
             f"Album source membership verified: {expected}/{expected} source assets "
             f"are present; album contains {actual} total assets{suffix}"
         ),
+    )
+
+
+def synchronize_archive_album_to_source(
+    server_url: str,
+    api_key: str,
+    album_id: str,
+    source_asset_ids: tuple[str, ...] | list[str],
+    *,
+    trash_orphaned_extras: bool = False,
+    skip_ssl: bool = False,
+    timeout: float = 30.0,
+    cancel_event: Event | None = None,
+    on_log: RepairLog | None = None,
+) -> AlbumSyncResult:
+    """Make one target album mirror the canonical source asset set.
+
+    Extras are first removed from this album only. When
+    `trash_orphaned_extras` is enabled, each removed asset is checked for
+    membership in other albums. Assets that are no longer used by any album
+    are moved to Immich Trash with `force=false`; assets still referenced by
+    another album are preserved on the server.
+
+    This function never permanently deletes assets.
+    """
+
+    clean_url = normalize_server_url(server_url)
+    source_ids = {str(asset_id) for asset_id in source_asset_ids if asset_id}
+    base = AlbumSyncResult(
+        attempted=False,
+        success=False,
+        source_assets=len(source_ids),
+    )
+
+    if not clean_url:
+        return _sync_message(base, "Album sync skipped: server URL is empty")
+    if not api_key:
+        return _sync_message(base, "Album sync skipped: API key is empty")
+    if not album_id:
+        return _sync_message(base, "Album sync skipped: album ID is empty")
+    if not source_ids:
+        return _sync_message(
+            base,
+            "Album sync skipped: no resolved source asset IDs are available",
+        )
+
+    try:
+        album_ids = _list_album_asset_ids(
+            clean_url,
+            api_key,
+            album_id,
+            skip_ssl=skip_ssl,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return AlbumSyncResult(
+            attempted=True,
+            success=False,
+            source_assets=len(source_ids),
+            message=f"Album sync lookup failed: {exc}",
+        )
+
+    missing = source_ids - album_ids
+    extras = album_ids - source_ids
+    details: list[str] = []
+
+    if missing:
+        return AlbumSyncResult(
+            attempted=True,
+            success=False,
+            source_assets=len(source_ids),
+            album_assets_before=len(album_ids),
+            extras_found=len(extras),
+            message=(
+                f"Album sync refused: {len(missing)} source assets are not "
+                "members of the target album"
+            ),
+        )
+
+    if not extras:
+        return AlbumSyncResult(
+            attempted=True,
+            success=True,
+            source_assets=len(source_ids),
+            album_assets_before=len(album_ids),
+            album_assets_after=len(album_ids),
+            message=(
+                f"Album sync verified: exact mirror already present "
+                f"({len(source_ids)} assets)"
+            ),
+        )
+
+    if cancel_event is not None and cancel_event.is_set():
+        return AlbumSyncResult(
+            attempted=True,
+            success=False,
+            source_assets=len(source_ids),
+            album_assets_before=len(album_ids),
+            extras_found=len(extras),
+            message="Album sync cancelled before removing extras",
+        )
+
+    _emit(
+        on_log,
+        (
+            f"Album sync: {len(source_ids)} source assets, "
+            f"{len(album_ids)} album assets, {len(extras)} extras"
+        ),
+    )
+
+    try:
+        response = requests.delete(
+            f"{clean_url}/api/albums/{album_id}/assets",
+            headers=_headers(api_key),
+            json={"ids": sorted(extras)},
+            verify=not skip_ssl,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return AlbumSyncResult(
+            attempted=True,
+            success=False,
+            source_assets=len(source_ids),
+            album_assets_before=len(album_ids),
+            extras_found=len(extras),
+            message=f"Album sync remove failed: {exc}",
+        )
+
+    if response.status_code in (401, 403):
+        return AlbumSyncResult(
+            attempted=True,
+            success=False,
+            source_assets=len(source_ids),
+            album_assets_before=len(album_ids),
+            extras_found=len(extras),
+            message=(
+                f"Album sync remove failed: HTTP {response.status_code}. "
+                "The API key needs album.asset.delete permission."
+            ),
+        )
+    if response.status_code != 200:
+        return AlbumSyncResult(
+            attempted=True,
+            success=False,
+            source_assets=len(source_ids),
+            album_assets_before=len(album_ids),
+            extras_found=len(extras),
+            message=f"Album sync remove failed: Immich returned HTTP {response.status_code}",
+        )
+
+    try:
+        payload = response.json()
+    except Exception:
+        return AlbumSyncResult(
+            attempted=True,
+            success=False,
+            source_assets=len(source_ids),
+            album_assets_before=len(album_ids),
+            extras_found=len(extras),
+            message="Album sync remove failed: Immich returned invalid JSON",
+        )
+
+    removed_ids: list[str] = []
+    failed_ids: list[str] = []
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            asset_id = str(item.get("id") or "")
+            if item.get("success") is True and asset_id:
+                removed_ids.append(asset_id)
+            elif asset_id:
+                failed_ids.append(asset_id)
+                details.append(
+                    f"{asset_id}: remove from album failed: "
+                    f"{item.get('error') or 'unknown'}"
+                )
+    else:
+        failed_ids = sorted(extras)
+
+    if failed_ids or set(removed_ids) != extras:
+        return AlbumSyncResult(
+            attempted=True,
+            success=False,
+            source_assets=len(source_ids),
+            album_assets_before=len(album_ids),
+            extras_found=len(extras),
+            removed_from_album=len(removed_ids),
+            message=(
+                f"Album sync incomplete: removed {len(removed_ids)} of "
+                f"{len(extras)} extra assets"
+            ),
+            details=tuple(details),
+        )
+
+    orphan_ids: list[str] = []
+    preserved = 0
+    if trash_orphaned_extras:
+        _emit(
+            on_log,
+            (
+                "Album cleanup: checking removed extras for membership "
+                "in other albums"
+            ),
+        )
+        for asset_id in removed_ids:
+            if cancel_event is not None and cancel_event.is_set():
+                return AlbumSyncResult(
+                    attempted=True,
+                    success=False,
+                    source_assets=len(source_ids),
+                    album_assets_before=len(album_ids),
+                    extras_found=len(extras),
+                    removed_from_album=len(removed_ids),
+                    trash_candidates=len(orphan_ids),
+                    preserved_in_other_albums=preserved,
+                    message="Album cleanup cancelled",
+                    details=tuple(details),
+                )
+
+            try:
+                memberships = _get_asset_album_memberships(
+                    clean_url,
+                    api_key,
+                    asset_id,
+                    skip_ssl=skip_ssl,
+                    timeout=timeout,
+                )
+            except requests.RequestException as exc:
+                return AlbumSyncResult(
+                    attempted=True,
+                    success=False,
+                    source_assets=len(source_ids),
+                    album_assets_before=len(album_ids),
+                    extras_found=len(extras),
+                    removed_from_album=len(removed_ids),
+                    trash_candidates=len(orphan_ids),
+                    preserved_in_other_albums=preserved,
+                    message=f"Album cleanup membership check failed: {exc}",
+                    details=tuple(details),
+                )
+
+            other_albums = [
+                album
+                for album in memberships
+                if str(album.get("id") or "") != album_id
+            ]
+            if other_albums:
+                preserved += 1
+                names = ", ".join(
+                    str(album.get("albumName") or album.get("id") or "?")
+                    for album in other_albums[:4]
+                )
+                details.append(
+                    f"{asset_id}: kept on server; still used by album(s): {names}"
+                )
+            else:
+                orphan_ids.append(asset_id)
+
+        if orphan_ids:
+            _emit(
+                on_log,
+                (
+                    f"Album cleanup: moving {len(orphan_ids)} orphaned extras "
+                    "to Immich Trash"
+                ),
+            )
+            try:
+                trash_response = requests.delete(
+                    f"{clean_url}/api/assets",
+                    headers=_headers(api_key),
+                    json={"ids": orphan_ids, "force": False},
+                    verify=not skip_ssl,
+                    timeout=timeout,
+                )
+            except requests.RequestException as exc:
+                return AlbumSyncResult(
+                    attempted=True,
+                    success=False,
+                    source_assets=len(source_ids),
+                    album_assets_before=len(album_ids),
+                    extras_found=len(extras),
+                    removed_from_album=len(removed_ids),
+                    trash_candidates=len(orphan_ids),
+                    preserved_in_other_albums=preserved,
+                    message=f"Album cleanup trash failed: {exc}",
+                    details=tuple(details),
+                )
+
+            if trash_response.status_code in (401, 403):
+                return AlbumSyncResult(
+                    attempted=True,
+                    success=False,
+                    source_assets=len(source_ids),
+                    album_assets_before=len(album_ids),
+                    extras_found=len(extras),
+                    removed_from_album=len(removed_ids),
+                    trash_candidates=len(orphan_ids),
+                    preserved_in_other_albums=preserved,
+                    message=(
+                        f"Album cleanup trash failed: HTTP "
+                        f"{trash_response.status_code}. The API key needs "
+                        "asset.delete permission."
+                    ),
+                    details=tuple(details),
+                )
+            if trash_response.status_code != 204:
+                return AlbumSyncResult(
+                    attempted=True,
+                    success=False,
+                    source_assets=len(source_ids),
+                    album_assets_before=len(album_ids),
+                    extras_found=len(extras),
+                    removed_from_album=len(removed_ids),
+                    trash_candidates=len(orphan_ids),
+                    preserved_in_other_albums=preserved,
+                    message=(
+                        "Album cleanup trash failed: Immich returned HTTP "
+                        f"{trash_response.status_code}"
+                    ),
+                    details=tuple(details),
+                )
+
+    try:
+        final_ids = _list_album_asset_ids(
+            clean_url,
+            api_key,
+            album_id,
+            skip_ssl=skip_ssl,
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return AlbumSyncResult(
+            attempted=True,
+            success=False,
+            source_assets=len(source_ids),
+            album_assets_before=len(album_ids),
+            extras_found=len(extras),
+            removed_from_album=len(removed_ids),
+            trash_candidates=len(orphan_ids),
+            trashed_assets=len(orphan_ids) if trash_orphaned_extras else 0,
+            preserved_in_other_albums=preserved,
+            message=f"Album sync final verification failed: {exc}",
+            details=tuple(details),
+        )
+
+    success = final_ids == source_ids
+    trashed = len(orphan_ids) if trash_orphaned_extras else 0
+    message = (
+        f"Album sync complete: {len(source_ids)} source assets; "
+        f"removed {len(removed_ids)} extras from album"
+    )
+    if trash_orphaned_extras:
+        message += (
+            f"; trashed {trashed} orphaned extras; "
+            f"kept {preserved} assets used by other albums"
+        )
+
+    return AlbumSyncResult(
+        attempted=True,
+        success=success,
+        source_assets=len(source_ids),
+        album_assets_before=len(album_ids),
+        extras_found=len(extras),
+        removed_from_album=len(removed_ids),
+        trash_candidates=len(orphan_ids),
+        trashed_assets=trashed,
+        preserved_in_other_albums=preserved,
+        album_assets_after=len(final_ids),
+        message=message if success else f"{message}; final album set does not match source",
+        details=tuple(details),
     )
 
 
@@ -586,6 +976,7 @@ def repair_archive_album_membership(
         blocked_assets=blocked,
         trashed_assets=len(trashed),
         restored_assets=restored_assets,
+        resolved_asset_ids=tuple(resolved),
         message=message,
         details=tuple(details),
     )
@@ -627,6 +1018,92 @@ def _resolve_checksum_batch(
             trashed.setdefault(asset_id, relative)
         else:
             resolved.setdefault(asset_id, relative)
+
+
+def _list_album_asset_ids(
+    clean_url: str,
+    api_key: str,
+    album_id: str,
+    *,
+    skip_ssl: bool,
+    timeout: float,
+) -> set[str]:
+    ids: set[str] = set()
+    cursor: str | None = None
+
+    while True:
+        payload: dict[str, object] = {
+            "filter": {"albumIds": {"any": [album_id]}},
+            "size": 1000,
+        }
+        if cursor:
+            payload["cursor"] = cursor
+
+        response = requests.post(
+            f"{clean_url}/api/search/metadata",
+            headers=_headers(api_key),
+            json=payload,
+            verify=not skip_ssl,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        body = response.json()
+        assets = body.get("assets") if isinstance(body, dict) else None
+        items = assets.get("items") if isinstance(assets, dict) else None
+        if not isinstance(items, list):
+            raise requests.RequestException("unexpected album asset search response")
+
+        for item in items:
+            if isinstance(item, dict):
+                asset_id = str(item.get("id") or "")
+                if asset_id:
+                    ids.add(asset_id)
+
+        next_cursor = assets.get("nextCursor") if isinstance(assets, dict) else None
+        if not next_cursor:
+            break
+        cursor = str(next_cursor)
+
+    return ids
+
+
+def _get_asset_album_memberships(
+    clean_url: str,
+    api_key: str,
+    asset_id: str,
+    *,
+    skip_ssl: bool,
+    timeout: float,
+) -> list[dict]:
+    response = requests.get(
+        f"{clean_url}/api/albums",
+        headers=_headers(api_key),
+        params={"assetId": asset_id},
+        verify=not skip_ssl,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise requests.RequestException("unexpected asset album membership response")
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def _sync_message(result: AlbumSyncResult, message: str) -> AlbumSyncResult:
+    return AlbumSyncResult(
+        attempted=result.attempted,
+        success=result.success,
+        source_assets=result.source_assets,
+        album_assets_before=result.album_assets_before,
+        extras_found=result.extras_found,
+        removed_from_album=result.removed_from_album,
+        trash_candidates=result.trash_candidates,
+        trashed_assets=result.trashed_assets,
+        preserved_in_other_albums=result.preserved_in_other_albums,
+        album_assets_after=result.album_assets_after,
+        message=message,
+        details=result.details,
+    )
 
 
 def _sha1_hex(path: Path) -> str:
