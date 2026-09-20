@@ -106,10 +106,7 @@ def test_archive_migration_page_can_show_done_and_switch_to_russian(
     assert page.restore_trashed_check.isChecked() is False
     assert page.sync_album_check.text() == "Синхронизировать альбом"
     assert page.sync_album_check.isChecked() is False
-    assert (
-        page.trash_orphaned_check.text()
-        == "Лишнее без других альбомов → в корзину"
-    )
+    assert page.trash_orphaned_check.text() == "Лишнее без других альбомов → в корзину"
     assert page.trash_orphaned_check.isEnabled() is False
     assert (
         page.queue_progress_label.text()
@@ -502,7 +499,6 @@ def test_select_all_header_uses_real_native_checkbox(tmp_path, monkeypatch, qtbo
     assert checkbox.width() > 0
     assert checkbox.height() > 0
     assert checkbox.isVisible()
-
 
 
 def test_archive_cleanup_options_are_dependency_safe(tmp_path, monkeypatch, qtbot):
