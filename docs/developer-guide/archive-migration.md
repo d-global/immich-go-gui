@@ -51,7 +51,9 @@ A rescan refreshes file counts and sizes while preserving the lifecycle state fo
 
 State is profile-scoped in `archive_migration_state.json`, next to the existing profile configuration files.
 
-Archive Migration does not trust an immich-go exit code or its `added to album` event counter as proof of album membership. After every successful CLI run it independently queries Immich and resolves one exact-name destination album. Exact `assetCount` equality remains the fast path. When server duplicates are involved or the count differs, Archive Migration resolves the source files by SHA1 and proves per-source membership through Immich before persisting `DONE`. A pre-existing album may contain additional assets; those extras are preserved and do not fail migration once all source assets are proven members.
+Archive Migration does not trust an immich-go exit code or its `added to album` event counter as proof of album membership. After every successful CLI run it independently queries Immich and resolves one exact-name destination album. Exact `assetCount` equality remains the fast path. When server duplicates are involved or the count differs, Archive Migration resolves the source files by SHA1 and proves per-source membership through Immich before persisting `DONE`.
+
+The operator can additionally enable exact album synchronization. In this mode the local first-level folder is treated as the canonical album membership set. Assets present in the Immich album but absent from the local folder are removed from that album. An optional second cleanup switch then checks each removed extra against all other Immich albums. Extras that still belong to another album are kept on the server; extras that belong to no other album are moved to Immich Trash with `force=false`. Archive Migration never performs permanent deletion in this step. Physical storage is reclaimed later according to the Immich Trash retention policy or after the operator explicitly empties Trash.
 
 If an otherwise successful run needs membership proof or leaves the target album under-filled, Archive Migration performs one targeted repair pass. It hashes the source files with SHA1, resolves existing same-user assets through Immich's official `POST /api/assets/bulk-upload-check`, and retries only album membership through `PUT /api/albums/{id}/assets`. The per-asset response is inspected: `duplicate` means the asset is already in the album, while `no_permission` is reported with the source filename instead of being silently accepted. Trashed assets are never restored automatically. An explicit queue option can restore only checksum-matched trash assets from the selected source folder through Immich's targeted `POST /api/trash/restore/assets` endpoint, after which the repair pass retries album membership. The option is off by default, requires `asset.delete` API permission, and never performs a global trash restore. The repair pass never changes visibility or metadata.
 
@@ -72,7 +74,8 @@ The eventual page is a workbench, not a wizard:
 9. run sequential uploads, one folder at a time;
 10. map each selected first-level folder to an Immich album with that folder's name;
 11. verify source membership in the destination album after a successful CLI run;
-12. persist `DONE/ERROR/PARTIAL` after every folder, not only at the end of the batch. A user-cancelled active folder remains retryable as `PARTIAL`.
+12. optionally synchronize the destination album exactly to the canonical local folder and move orphaned extras to Immich Trash after cross-album checks;
+13. persist `DONE/ERROR/PARTIAL` after every folder, not only at the end of the batch. A user-cancelled active folder remains retryable as `PARTIAL`.
 
 The UI should expose current folder, queue position, progress, and the relevant log without making the user hunt through unrelated tabs.
 
