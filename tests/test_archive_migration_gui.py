@@ -348,7 +348,6 @@ def test_archive_migration_select_all_respects_filter_and_partial_state(
     assert page.selected_folder_paths() == []
 
 
-
 def test_archive_migration_compact_layout_prioritizes_table(
     tmp_path, monkeypatch, qtbot
 ):
