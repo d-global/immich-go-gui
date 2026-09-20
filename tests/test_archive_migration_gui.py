@@ -522,3 +522,36 @@ def test_archive_cleanup_options_are_dependency_safe(tmp_path, monkeypatch, qtbo
     page.sync_album_check.setChecked(False)
     assert page.trash_orphaned_check.isChecked() is False
     assert page.trash_orphaned_check.isEnabled() is False
+
+
+
+def test_archive_migration_recheck_done_to_partial(tmp_path, monkeypatch, qtbot):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.save",
+        lambda *_: None,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+    page.hide_done_check.setChecked(False)
+    row = _row_for(page, "Azov")
+    page.table.selectRow(row)
+
+    assert page.recheck_done_button.isEnabled() is True
+    page.recheck_selected_done()
+
+    entry = state.get(str(tmp_path / "Azov"))
+    assert entry.status == ArchiveFolderStatus.PARTIAL
+    row = _row_for(page, "Azov")
+    assert page.table.item(row, 4).text() == "PARTIAL"
+    assert bool(
+        page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable
+    )
