@@ -397,3 +397,27 @@ def test_finalize_keeps_failure_when_membership_repair_did_not_prove_source():
     )
 
     assert finalize_archive_album_verification(initial, repair) is initial
+
+
+
+def test_finalize_repair_failure_overrides_matching_count():
+    final = AlbumVerificationResult(
+        success=True,
+        album_name="Existing",
+        expected_assets=20,
+        actual_assets=20,
+        album_id="album-1",
+        message="Album verified: 20 assets",
+    )
+    repair = AlbumRepairResult(
+        attempted=True,
+        success=False,
+        resolved_assets=10,
+        trashed_assets=10,
+        message="Album repair: 10 source assets are still in trash",
+    )
+
+    result = finalize_archive_album_verification(final, repair)
+
+    assert result.success is False
+    assert "still in trash" in result.message
