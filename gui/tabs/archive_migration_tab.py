@@ -12,7 +12,7 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QRect, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QStyle,
+    QStyleOptionButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -164,16 +166,82 @@ class _SortableItem(QTableWidgetItem):
         return super().__lt__(other)
 
 
-class _SelectAllCheckBox(QCheckBox):
-    """Two-state user toggle that can display a programmatic partial state."""
+class _SelectAllHeader(QHeaderView):
+    """Header with a tri-state checkbox in the first table section."""
 
-    def nextCheckState(self) -> None:
+    check_state_changed = Signal(int)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self._check_state = Qt.CheckState.Unchecked
+        self.setSectionsClickable(True)
+
+    def checkState(self) -> Qt.CheckState:
+        return self._check_state
+
+    def setCheckState(self, state: Qt.CheckState) -> None:
+        state = Qt.CheckState(state)
+        if state == self._check_state:
+            return
+        self._check_state = state
+        self.viewport().update()
+
+    def toggleCheckState(self) -> None:
         target = (
             Qt.CheckState.Unchecked
-            if self.checkState() == Qt.CheckState.Checked
+            if self._check_state == Qt.CheckState.Checked
             else Qt.CheckState.Checked
         )
         self.setCheckState(target)
+        self.check_state_changed.emit(target.value)
+
+    def _checkbox_rect(self, section_rect: QRect) -> QRect:
+        option = QStyleOptionButton()
+        indicator = self.style().subElementRect(
+            QStyle.SubElement.SE_CheckBoxIndicator,
+            option,
+            self,
+        )
+        x = section_rect.left() + 6
+        y = section_rect.top() + (section_rect.height() - indicator.height()) // 2
+        return QRect(x, y, indicator.width(), indicator.height())
+
+    def paintSection(self, painter, rect: QRect, logical_index: int) -> None:
+        super().paintSection(painter, rect, logical_index)
+        if logical_index != 0:
+            return
+
+        option = QStyleOptionButton()
+        option.rect = self._checkbox_rect(rect)
+        option.state = QStyle.StateFlag.State_Enabled
+        if self._check_state == Qt.CheckState.Checked:
+            option.state |= QStyle.StateFlag.State_On
+        elif self._check_state == Qt.CheckState.PartiallyChecked:
+            option.state |= QStyle.StateFlag.State_NoChange
+        else:
+            option.state |= QStyle.StateFlag.State_Off
+        self.style().drawControl(
+            QStyle.ControlElement.CE_CheckBox,
+            option,
+            painter,
+            self,
+        )
+
+    def mousePressEvent(self, event) -> None:
+        point = event.position().toPoint()
+        logical_index = self.logicalIndexAt(point)
+        if logical_index == 0:
+            section_rect = QRect(
+                self.sectionViewportPosition(0),
+                0,
+                self.sectionSize(0),
+                self.height(),
+            )
+            if self._checkbox_rect(section_rect).contains(point):
+                self.toggleCheckState()
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
 
 class _ArchiveScanThread(QThread):
@@ -541,11 +609,11 @@ class ArchiveMigrationPage(QWidget):
         outer.addWidget(queue_frame)
 
         self.table = QTableWidget(0, 5)
-        self.select_all_check = _SelectAllCheckBox()
-        self.select_all_check.setTristate(True)
-        self.select_all_check.setCheckState(Qt.CheckState.Unchecked)
-        self.select_all_check.stateChanged.connect(self._on_select_all_changed)
-        self.table.setCornerWidget(self.select_all_check)
+        self.select_all_header = _SelectAllHeader(self.table)
+        self.select_all_header.check_state_changed.connect(
+            self._on_select_all_changed
+        )
+        self.table.setHorizontalHeader(self.select_all_header)
         self._syncing_select_all = False
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -618,7 +686,7 @@ class ArchiveMigrationPage(QWidget):
         self.stop_on_error_check.setText(self._tr("stop_on_error"))
         self.restore_trashed_check.setText(self._tr("restore_trashed"))
         self.restore_trashed_check.setToolTip(self._tr("restore_trashed_tip"))
-        self.select_all_check.setToolTip(self._tr("select_all_tip"))
+        self.select_all_header.setToolTip(self._tr("select_all_tip"))
         self.queue_start_button.setText(self._tr("start_queue"))
         self.queue_cancel_button.setText(self._tr("cancel_queue"))
         self.queue_log.setPlaceholderText(self._tr("queue_log"))
@@ -844,7 +912,7 @@ class ArchiveMigrationPage(QWidget):
         self.choose_button.setEnabled(not running)
         self.scan_button.setEnabled(not running)
         self.table.setEnabled(not running)
-        self.select_all_check.setEnabled(not running)
+        self.select_all_header.setEnabled(not running)
         self.queue_tag_edit.setEnabled(not running)
         self.session_tag_check.setEnabled(not running)
         self.stop_on_error_check.setEnabled(not running)
@@ -1033,8 +1101,8 @@ class ArchiveMigrationPage(QWidget):
 
         self._syncing_select_all = True
         try:
-            self.select_all_check.setCheckState(state)
-            self.select_all_check.setEnabled(
+            self.select_all_header.setCheckState(state)
+            self.select_all_header.setEnabled(
                 bool(items)
                 and not (
                     self._queue_thread is not None
