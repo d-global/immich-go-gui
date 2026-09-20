@@ -1,3 +1,4 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 from PySide6.QtCore import Qt
@@ -371,7 +372,6 @@ def test_archive_migration_compact_layout_prioritizes_table(
     assert page.table.minimumHeight() == 280
 
 
-
 def test_archive_migration_shows_total_folder_inventory(tmp_path, monkeypatch, qtbot):
     state = _state_for(tmp_path)
     monkeypatch.setattr(
@@ -393,9 +393,7 @@ def test_archive_migration_shows_total_folder_inventory(tmp_path, monkeypatch, q
     assert "В корне вне очереди: 2 файлов" in text
 
 
-def test_archive_migration_exclude_is_persistent_skip(
-    tmp_path, monkeypatch, qtbot
-):
+def test_archive_migration_exclude_is_persistent_skip(tmp_path, monkeypatch, qtbot):
     state = _state_for(tmp_path)
     saves = []
     monkeypatch.setattr(
@@ -421,9 +419,7 @@ def test_archive_migration_exclude_is_persistent_skip(
     assert saves
     row = _row_for(page, "Anapa")
     assert page.table.item(row, 4).text() == "SKIP"
-    assert not bool(
-        page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable
-    )
+    assert not bool(page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable)
 
 
 def test_archive_migration_restore_skip_to_todo(tmp_path, monkeypatch, qtbot):
@@ -475,7 +471,8 @@ def test_archive_migration_open_folder_uses_system_file_manager(
 
     page.open_current_folder()
 
-    assert opened == [str(tmp_path / "Anapa")]
+    assert len(opened) == 1
+    assert Path(opened[0]) == tmp_path / "Anapa"
 
 
 def test_select_all_header_uses_real_native_checkbox(tmp_path, monkeypatch, qtbot):
