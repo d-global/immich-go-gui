@@ -194,6 +194,48 @@ def verify_archive_album(
     )
 
 
+def finalize_archive_album_verification(
+    final: AlbumVerificationResult,
+    repair: AlbumRepairResult,
+) -> AlbumVerificationResult:
+    """Accept verified source membership even when the album has extra assets.
+
+    Exact asset-count equality is the cheapest completion check and remains the
+    normal fast path. A pre-existing same-named album can legitimately contain
+    additional assets, though. In that case the repair pass proves membership
+    source-by-source: every checksum-resolved source asset must either be added
+    successfully or reported as an existing member of this target album.
+
+    Extra server assets are preserved. Archive Migration never deletes them.
+    """
+
+    if final.success or not repair.success:
+        return final
+
+    actual = final.actual_assets
+    expected = final.expected_assets
+    if not isinstance(actual, int) or actual < expected:
+        return final
+
+    extras = actual - expected
+    suffix = (
+        f"; album contains {extras} extra assets, preserved"
+        if extras > 0
+        else ""
+    )
+    return AlbumVerificationResult(
+        success=True,
+        album_name=final.album_name,
+        expected_assets=expected,
+        actual_assets=actual,
+        album_id=final.album_id,
+        message=(
+            f"Album source membership verified: {expected}/{expected} source assets "
+            f"are present; album contains {actual} total assets{suffix}"
+        ),
+    )
+
+
 def repair_archive_album_membership(
     server_url: str,
     api_key: str,
