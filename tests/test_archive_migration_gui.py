@@ -104,6 +104,13 @@ def test_archive_migration_page_can_show_done_and_switch_to_russian(
         == "Восстанавливать найденные дубли из корзины"
     )
     assert page.restore_trashed_check.isChecked() is False
+    assert page.sync_album_check.text() == "Синхронизировать альбом"
+    assert page.sync_album_check.isChecked() is False
+    assert (
+        page.trash_orphaned_check.text()
+        == "Лишнее без других альбомов → в корзину"
+    )
+    assert page.trash_orphaned_check.isEnabled() is False
     assert (
         page.queue_progress_label.text()
         == "Выберите папки для подготовки очереди миграции."
@@ -495,3 +502,27 @@ def test_select_all_header_uses_real_native_checkbox(tmp_path, monkeypatch, qtbo
     assert checkbox.width() > 0
     assert checkbox.height() > 0
     assert checkbox.isVisible()
+
+
+
+def test_archive_cleanup_options_are_dependency_safe(tmp_path, monkeypatch, qtbot):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+
+    assert page.trash_orphaned_check.isEnabled() is False
+    page.sync_album_check.setChecked(True)
+    assert page.trash_orphaned_check.isEnabled() is True
+
+    page.trash_orphaned_check.setChecked(True)
+    page.sync_album_check.setChecked(False)
+    assert page.trash_orphaned_check.isChecked() is False
+    assert page.trash_orphaned_check.isEnabled() is False
