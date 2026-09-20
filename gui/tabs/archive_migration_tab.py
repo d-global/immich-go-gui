@@ -362,19 +362,27 @@ class _ArchiveQueueThread(QThread):
         )
         self.log_line.emit(item.name, verification.message)
 
+        server_duplicates = int(getattr(result, "files_skipped", 0) or 0)
+        needs_membership_check = (
+            not verification.success or server_duplicates > 0
+        )
         can_repair = (
-            not verification.success
+            needs_membership_check
             and verification.album_id is not None
             and isinstance(verification.actual_assets, int)
-            and verification.actual_assets != expected_assets
             and not self._cancel_event.is_set()
         )
         if not can_repair:
             return verification
 
+        reason = (
+            "Album count differs"
+            if not verification.success
+            else f"{server_duplicates} server duplicates need membership proof"
+        )
         self.log_line.emit(
             item.name,
-            "Album count differs; checking source membership by SHA1",
+            f"{reason}; checking source membership by SHA1",
         )
         repair = repair_archive_album_membership(
             self.server_url,
