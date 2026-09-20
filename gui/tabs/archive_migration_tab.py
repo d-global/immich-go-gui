@@ -76,6 +76,8 @@ _TRANSLATIONS = {
         "exclude_tip": "Persistently mark checked or selected folders as SKIP",
         "restore_selected": "Restore",
         "restore_selected_tip": "Return selected SKIP folders to TODO",
+        "recheck_done": "Recheck DONE",
+        "recheck_done_tip": "Return selected DONE folders to PARTIAL so they can be verified or synchronized again",
         "open_folder": "Open folder",
         "open_folder_tip": "Open the current folder in the system file manager",
         "folder": "Folder",
@@ -137,6 +139,8 @@ _TRANSLATIONS = {
         "exclude_tip": "Навсегда пометить отмеченные или выделенные папки как SKIP",
         "restore_selected": "Вернуть",
         "restore_selected_tip": "Вернуть выделенные SKIP-папки в TODO",
+        "recheck_done": "Перепроверить DONE",
+        "recheck_done_tip": "Вернуть выбранные DONE-папки в PARTIAL для повторной проверки или синхронизации",
         "open_folder": "Открыть папку",
         "open_folder_tip": "Открыть текущую папку в Проводнике",
         "folder": "Папка",
@@ -641,6 +645,10 @@ class ArchiveMigrationPage(QWidget):
         self.restore_skip_button = QPushButton()
         self.restore_skip_button.clicked.connect(self.restore_selected_skips)
         filter_row.addWidget(self.restore_skip_button)
+
+        self.recheck_done_button = QPushButton()
+        self.recheck_done_button.clicked.connect(self.recheck_selected_done)
+        filter_row.addWidget(self.recheck_done_button)
         outer.addLayout(filter_row)
 
         queue_frame = QFrame()
@@ -800,6 +808,8 @@ class ArchiveMigrationPage(QWidget):
         self.exclude_button.setToolTip(self._tr("exclude_tip"))
         self.restore_skip_button.setText(self._tr("restore_selected"))
         self.restore_skip_button.setToolTip(self._tr("restore_selected_tip"))
+        self.recheck_done_button.setText(self._tr("recheck_done"))
+        self.recheck_done_button.setToolTip(self._tr("recheck_done_tip"))
         self.queue_start_button.setText(self._tr("start_queue"))
         self.queue_cancel_button.setText(self._tr("cancel_queue"))
         self.queue_log.setPlaceholderText(self._tr("queue_log"))
@@ -1067,6 +1077,7 @@ class ArchiveMigrationPage(QWidget):
         )
         self.exclude_button.setEnabled(not running)
         self.restore_skip_button.setEnabled(not running)
+        self.recheck_done_button.setEnabled(not running)
         self.queue_cancel_button.setVisible(running)
         self.queue_cancel_button.setEnabled(running)
         if running:
@@ -1317,6 +1328,15 @@ class ArchiveMigrationPage(QWidget):
                 for path in action_paths
             )
         )
+        self.recheck_done_button.setEnabled(
+            bool(action_paths)
+            and not queue_running
+            and any(
+                (entry := self.state.get(path)) is not None
+                and entry.status == ArchiveFolderStatus.DONE
+                for path in action_paths
+            )
+        )
 
     def open_current_folder(self) -> None:
         path = self._current_folder_path()
@@ -1354,6 +1374,20 @@ class ArchiveMigrationPage(QWidget):
                 continue
             entry.status = ArchiveFolderStatus.TODO
             entry.last_error = None
+            changed = True
+        if not changed:
+            return
+        ArchiveMigrationStateStore.save(self.state, self.profile_name)
+        self._populate_table()
+
+    def recheck_selected_done(self) -> None:
+        changed = False
+        for path in self._selected_row_paths():
+            entry = self.state.get(path)
+            if entry is None or entry.status != ArchiveFolderStatus.DONE:
+                continue
+            entry.status = ArchiveFolderStatus.PARTIAL
+            entry.last_error = "Reopened for explicit recheck/synchronization"
             changed = True
         if not changed:
             return
