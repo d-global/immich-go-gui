@@ -422,7 +422,6 @@ def test_finalize_repair_failure_overrides_matching_count():
     assert "still in trash" in result.message
 
 
-
 def test_sync_album_removes_extras_without_trashing(monkeypatch):
     search_calls = 0
 
