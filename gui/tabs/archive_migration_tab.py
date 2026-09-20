@@ -363,9 +363,7 @@ class _ArchiveQueueThread(QThread):
         self.log_line.emit(item.name, verification.message)
 
         server_duplicates = int(getattr(result, "files_skipped", 0) or 0)
-        needs_membership_check = (
-            not verification.success or server_duplicates > 0
-        )
+        needs_membership_check = not verification.success or server_duplicates > 0
         can_repair = (
             needs_membership_check
             and verification.album_id is not None
@@ -954,7 +952,9 @@ class ArchiveMigrationPage(QWidget):
         self.session_tag_check.setEnabled(not running)
         self.stop_on_error_check.setEnabled(not running)
         self.restore_trashed_check.setEnabled(not running)
-        self.open_folder_button.setEnabled(not running and bool(self._current_folder_path()))
+        self.open_folder_button.setEnabled(
+            not running and bool(self._current_folder_path())
+        )
         self.exclude_button.setEnabled(not running)
         self.restore_skip_button.setEnabled(not running)
         self.queue_cancel_button.setVisible(running)
