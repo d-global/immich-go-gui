@@ -238,8 +238,12 @@ def run_archive_queue(
         except Exception as exc:
             result = _FailedExecutionResult(str(exc))
 
+        cancelled_current = (
+            cancel_event is not None and cancel_event.is_set()
+        )
+
         verification = None
-        if result.success and verify is not None:
+        if result.success and verify is not None and not cancelled_current:
             try:
                 verification = verify(item, result)
             except Exception as exc:
@@ -250,11 +254,22 @@ def run_archive_queue(
         summary.not_started -= 1
         summary.processed_paths.append(item.path)
 
-        item_success = result.success and (verification is None or verification.success)
+        item_success = (
+            not cancelled_current
+            and result.success
+            and (verification is None or verification.success)
+        )
         if item_success:
             entry.status = ArchiveFolderStatus.DONE
             entry.last_error = None
             summary.done += 1
+        elif cancelled_current:
+            entry.status = ArchiveFolderStatus.PARTIAL
+            entry.last_error = result.message or (
+                "Upload was cancelled; server-side completion is unknown"
+            )
+            summary.partial += 1
+            summary.cancelled = True
         elif result.success and verification is not None:
             actual_assets = getattr(verification, "actual_assets", None)
             expected_assets = getattr(verification, "expected_assets", None)
