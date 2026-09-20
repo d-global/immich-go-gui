@@ -227,11 +227,7 @@ def finalize_archive_album_verification(
         return final
 
     extras = actual - expected
-    suffix = (
-        f"; album contains {extras} extra assets, preserved"
-        if extras > 0
-        else ""
-    )
+    suffix = f"; album contains {extras} extra assets, preserved" if extras > 0 else ""
     return AlbumVerificationResult(
         success=True,
         album_name=final.album_name,
