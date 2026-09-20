@@ -457,10 +457,7 @@ def synchronize_archive_album_to_source(
     if trash_orphaned_extras:
         _emit(
             on_log,
-            (
-                "Album cleanup: checking removed extras for membership "
-                "in other albums"
-            ),
+            ("Album cleanup: checking removed extras for membership in other albums"),
         )
         for asset_id in removed_ids:
             if cancel_event is not None and cancel_event.is_set():
@@ -500,9 +497,7 @@ def synchronize_archive_album_to_source(
                 )
 
             other_albums = [
-                album
-                for album in memberships
-                if str(album.get("id") or "") != album_id
+                album for album in memberships if str(album.get("id") or "") != album_id
             ]
             if other_albums:
                 preserved += 1
@@ -626,7 +621,9 @@ def synchronize_archive_album_to_source(
         trashed_assets=trashed,
         preserved_in_other_albums=preserved,
         album_assets_after=len(final_ids),
-        message=message if success else f"{message}; final album set does not match source",
+        message=message
+        if success
+        else f"{message}; final album set does not match source",
         details=tuple(details),
     )
 
