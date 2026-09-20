@@ -346,3 +346,27 @@ def test_archive_migration_select_all_respects_filter_and_partial_state(
     page.select_all_header.toggleCheckState()
     assert page.select_all_header.checkState() == Qt.CheckState.Unchecked
     assert page.selected_folder_paths() == []
+
+
+
+def test_archive_migration_compact_layout_prioritizes_table(
+    tmp_path, monkeypatch, qtbot
+):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+
+    assert page.subtitle_label.wordWrap() is False
+    assert page.progress_bar.maximumHeight() == 12
+    assert page.queue_progress_bar.maximumHeight() == 12
+    assert page.queue_log.maximumHeight() == 78
+    assert page.queue_log.minimumHeight() == 58
+    assert page.table.minimumHeight() == 280
