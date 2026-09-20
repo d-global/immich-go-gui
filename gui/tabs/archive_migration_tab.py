@@ -60,7 +60,7 @@ from core.profile_manager import active_profile_name
 _TRANSLATIONS = {
     "en": {
         "title": "Archive Migration",
-        "subtitle": "Migrate a legacy folder archive safely, one first-level folder per Immich album.",
+        "subtitle": "1 first-level folder = 1 Immich album.",
         "archive_root": "Archive root",
         "choose": "Choose folder",
         "scan": "Scan",
@@ -107,7 +107,7 @@ _TRANSLATIONS = {
     },
     "ru": {
         "title": "Миграция архива",
-        "subtitle": "Безопасная миграция старого архива: одна папка первого уровня = один альбом Immich.",
+        "subtitle": "1 папка первого уровня = 1 альбом Immich.",
         "archive_root": "Корень архива",
         "choose": "Выбрать папку",
         "scan": "Сканировать",
@@ -483,19 +483,19 @@ class ArchiveMigrationPage(QWidget):
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(24, 18, 24, 18)
-        outer.setSpacing(12)
+        outer.setContentsMargins(16, 10, 16, 10)
+        outer.setSpacing(8)
 
         heading = QHBoxLayout()
-        title_box = QVBoxLayout()
+        heading.setSpacing(10)
         self.title_label = QLabel()
         self.title_label.setObjectName("PageTitle")
+        heading.addWidget(self.title_label)
+
         self.subtitle_label = QLabel()
         self.subtitle_label.setObjectName("MutedText")
-        self.subtitle_label.setWordWrap(True)
-        title_box.addWidget(self.title_label)
-        title_box.addWidget(self.subtitle_label)
-        heading.addLayout(title_box, 1)
+        self.subtitle_label.setWordWrap(False)
+        heading.addWidget(self.subtitle_label, 1)
 
         self.language_label = QLabel()
         heading.addWidget(self.language_label)
@@ -511,10 +511,11 @@ class ArchiveMigrationPage(QWidget):
         source_frame = QFrame()
         source_frame.setObjectName("Card")
         source_layout = QVBoxLayout(source_frame)
-        source_layout.setContentsMargins(16, 14, 16, 14)
-        source_layout.setSpacing(10)
+        source_layout.setContentsMargins(12, 8, 12, 8)
+        source_layout.setSpacing(5)
 
         source_row = QHBoxLayout()
+        source_row.setSpacing(8)
         self.root_label = QLabel()
         source_row.addWidget(self.root_label)
         self.root_edit = QLineEdit()
@@ -533,15 +534,20 @@ class ArchiveMigrationPage(QWidget):
         source_row.addWidget(self.cancel_button)
         source_layout.addLayout(source_row)
 
+        source_meta_row = QHBoxLayout()
+        source_meta_row.setSpacing(12)
         self.progress_label = QLabel()
         self.progress_label.setObjectName("MutedText")
-        source_layout.addWidget(self.progress_label)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        source_layout.addWidget(self.progress_bar)
+        source_meta_row.addWidget(self.progress_label, 1)
         self.root_files_label = QLabel()
         self.root_files_label.setObjectName("MutedText")
-        source_layout.addWidget(self.root_files_label)
+        source_meta_row.addWidget(self.root_files_label)
+        source_layout.addLayout(source_meta_row)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedHeight(12)
+        self.progress_bar.setVisible(False)
+        source_layout.addWidget(self.progress_bar)
         outer.addWidget(source_frame)
 
         filter_row = QHBoxLayout()
@@ -565,10 +571,11 @@ class ArchiveMigrationPage(QWidget):
         queue_frame = QFrame()
         queue_frame.setObjectName("Card")
         queue_layout = QVBoxLayout(queue_frame)
-        queue_layout.setContentsMargins(16, 12, 16, 12)
-        queue_layout.setSpacing(8)
+        queue_layout.setContentsMargins(12, 8, 12, 8)
+        queue_layout.setSpacing(5)
 
         queue_controls = QHBoxLayout()
+        queue_controls.setSpacing(8)
         self.queue_tag_label = QLabel()
         queue_controls.addWidget(self.queue_tag_label)
         self.queue_tag_edit = QLineEdit()
@@ -580,6 +587,9 @@ class ArchiveMigrationPage(QWidget):
         self.stop_on_error_check = QCheckBox()
         self.stop_on_error_check.setChecked(True)
         queue_controls.addWidget(self.stop_on_error_check)
+        self.restore_trashed_check = QCheckBox()
+        self.restore_trashed_check.setChecked(False)
+        queue_controls.addWidget(self.restore_trashed_check)
         self.queue_start_button = QPushButton()
         self.queue_start_button.setObjectName("BtnRun")
         self.queue_start_button.clicked.connect(self.start_queue)
@@ -591,20 +601,22 @@ class ArchiveMigrationPage(QWidget):
         queue_controls.addWidget(self.queue_cancel_button)
         queue_layout.addLayout(queue_controls)
 
-        self.restore_trashed_check = QCheckBox()
-        self.restore_trashed_check.setChecked(False)
-        queue_layout.addWidget(self.restore_trashed_check)
-
+        queue_progress_row = QHBoxLayout()
+        queue_progress_row.setSpacing(10)
         self.queue_progress_label = QLabel()
         self.queue_progress_label.setObjectName("MutedText")
-        queue_layout.addWidget(self.queue_progress_label)
+        queue_progress_row.addWidget(self.queue_progress_label)
         self.queue_progress_bar = QProgressBar()
+        self.queue_progress_bar.setFixedHeight(12)
         self.queue_progress_bar.setVisible(False)
-        queue_layout.addWidget(self.queue_progress_bar)
+        queue_progress_row.addWidget(self.queue_progress_bar, 1)
+        queue_layout.addLayout(queue_progress_row)
+
         self.queue_log = QPlainTextEdit()
         self.queue_log.setReadOnly(True)
         self.queue_log.setMaximumBlockCount(1000)
-        self.queue_log.setMaximumHeight(130)
+        self.queue_log.setMinimumHeight(58)
+        self.queue_log.setMaximumHeight(78)
         queue_layout.addWidget(self.queue_log)
         outer.addWidget(queue_frame)
 
@@ -616,6 +628,7 @@ class ArchiveMigrationPage(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
+        self.table.setMinimumHeight(280)
         self.table.setSortingEnabled(True)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
