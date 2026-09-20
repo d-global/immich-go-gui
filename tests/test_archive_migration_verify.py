@@ -3,6 +3,7 @@ from core.archive_migration_verify import (
     AlbumVerificationResult,
     finalize_archive_album_verification,
     repair_archive_album_membership,
+    synchronize_archive_album_to_source,
     verify_archive_album,
 )
 
@@ -419,3 +420,145 @@ def test_finalize_repair_failure_overrides_matching_count():
 
     assert result.success is False
     assert "still in trash" in result.message
+
+
+
+def test_sync_album_removes_extras_without_trashing(monkeypatch):
+    search_calls = 0
+
+    def fake_post(url, **_kwargs):
+        nonlocal search_calls
+        assert url.endswith("/api/search/metadata")
+        search_calls += 1
+        ids = ["a", "b", "extra"] if search_calls == 1 else ["a", "b"]
+        return _Response(
+            200,
+            {
+                "assets": {
+                    "items": [{"id": asset_id} for asset_id in ids],
+                    "nextCursor": None,
+                }
+            },
+        )
+
+    def fake_delete(url, **kwargs):
+        assert url.endswith("/api/albums/album-1/assets")
+        assert kwargs["json"] == {"ids": ["extra"]}
+        return _Response(200, [{"id": "extra", "success": True}])
+
+    monkeypatch.setattr("core.archive_migration_verify.requests.post", fake_post)
+    monkeypatch.setattr("core.archive_migration_verify.requests.delete", fake_delete)
+
+    result = synchronize_archive_album_to_source(
+        "http://immich.test:2283",
+        "secret",
+        "album-1",
+        ["a", "b"],
+    )
+
+    assert result.success is True
+    assert result.extras_found == 1
+    assert result.removed_from_album == 1
+    assert result.trashed_assets == 0
+    assert result.album_assets_after == 2
+
+
+def test_sync_album_trashes_orphaned_extras(monkeypatch):
+    search_calls = 0
+    deleted = []
+
+    def fake_post(url, **_kwargs):
+        nonlocal search_calls
+        assert url.endswith("/api/search/metadata")
+        search_calls += 1
+        ids = ["a", "b", "extra"] if search_calls == 1 else ["a", "b"]
+        return _Response(
+            200,
+            {
+                "assets": {
+                    "items": [{"id": asset_id} for asset_id in ids],
+                    "nextCursor": None,
+                }
+            },
+        )
+
+    def fake_get(url, **kwargs):
+        assert url.endswith("/api/albums")
+        assert kwargs["params"] == {"assetId": "extra"}
+        return _Response(200, [])
+
+    def fake_delete(url, **kwargs):
+        deleted.append((url, kwargs["json"]))
+        if url.endswith("/api/albums/album-1/assets"):
+            return _Response(200, [{"id": "extra", "success": True}])
+        assert url.endswith("/api/assets")
+        return _Response(204, {})
+
+    monkeypatch.setattr("core.archive_migration_verify.requests.post", fake_post)
+    monkeypatch.setattr("core.archive_migration_verify.requests.get", fake_get)
+    monkeypatch.setattr("core.archive_migration_verify.requests.delete", fake_delete)
+
+    result = synchronize_archive_album_to_source(
+        "http://immich.test:2283",
+        "secret",
+        "album-1",
+        ["a", "b"],
+        trash_orphaned_extras=True,
+    )
+
+    assert result.success is True
+    assert result.trash_candidates == 1
+    assert result.trashed_assets == 1
+    assert result.preserved_in_other_albums == 0
+    assert deleted[-1][1] == {"ids": ["extra"], "force": False}
+
+
+def test_sync_album_preserves_extra_used_by_other_album(monkeypatch):
+    search_calls = 0
+    asset_delete_called = False
+
+    def fake_post(url, **_kwargs):
+        nonlocal search_calls
+        assert url.endswith("/api/search/metadata")
+        search_calls += 1
+        ids = ["a", "extra"] if search_calls == 1 else ["a"]
+        return _Response(
+            200,
+            {
+                "assets": {
+                    "items": [{"id": asset_id} for asset_id in ids],
+                    "nextCursor": None,
+                }
+            },
+        )
+
+    def fake_get(_url, **_kwargs):
+        return _Response(
+            200,
+            [{"id": "album-2", "albumName": "Other album", "assetCount": 1}],
+        )
+
+    def fake_delete(url, **_kwargs):
+        nonlocal asset_delete_called
+        if url.endswith("/api/assets"):
+            asset_delete_called = True
+            return _Response(204, {})
+        return _Response(200, [{"id": "extra", "success": True}])
+
+    monkeypatch.setattr("core.archive_migration_verify.requests.post", fake_post)
+    monkeypatch.setattr("core.archive_migration_verify.requests.get", fake_get)
+    monkeypatch.setattr("core.archive_migration_verify.requests.delete", fake_delete)
+
+    result = synchronize_archive_album_to_source(
+        "http://immich.test:2283",
+        "secret",
+        "album-1",
+        ["a"],
+        trash_orphaned_extras=True,
+    )
+
+    assert result.success is True
+    assert result.trashed_assets == 0
+    assert result.preserved_in_other_albums == 1
+    assert asset_delete_called is False
+    assert "Other album" in result.details[0]
