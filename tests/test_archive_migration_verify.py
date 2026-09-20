@@ -1,4 +1,7 @@
 from core.archive_migration_verify import (
+    AlbumRepairResult,
+    AlbumVerificationResult,
+    finalize_archive_album_verification,
     repair_archive_album_membership,
     verify_archive_album,
 )
@@ -350,3 +353,47 @@ def test_repair_reports_missing_delete_permission_for_targeted_restore(
     assert result.success is False
     assert result.trashed_assets == 1
     assert "asset.delete permission" in result.message
+
+
+
+def test_finalize_accepts_verified_membership_with_extra_album_assets():
+    initial = AlbumVerificationResult(
+        success=False,
+        album_name="Абрау",
+        expected_assets=20,
+        actual_assets=40,
+        album_id="album-1",
+        message="Album verification failed: expected 20 assets, found 40",
+    )
+    repair = AlbumRepairResult(
+        attempted=True,
+        success=True,
+        resolved_assets=20,
+        already_present=20,
+    )
+
+    result = finalize_archive_album_verification(initial, repair)
+
+    assert result.success is True
+    assert result.actual_assets == 40
+    assert "20/20 source assets" in result.message
+    assert "20 extra assets" in result.message
+
+
+def test_finalize_keeps_failure_when_membership_repair_did_not_prove_source():
+    initial = AlbumVerificationResult(
+        success=False,
+        album_name="Абрау",
+        expected_assets=20,
+        actual_assets=40,
+        album_id="album-1",
+        message="Album verification failed: expected 20 assets, found 40",
+    )
+    repair = AlbumRepairResult(
+        attempted=True,
+        success=False,
+        resolved_assets=10,
+        already_present=10,
+    )
+
+    assert finalize_archive_album_verification(initial, repair) is initial
