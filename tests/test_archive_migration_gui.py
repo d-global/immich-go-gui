@@ -240,11 +240,21 @@ def test_archive_migration_select_all_uses_corner_checkbox(
     state = _state_for(tmp_path)
     extra = tmp_path / "Gelendzhik"
     extra.mkdir()
-    state.folders[str(extra).lower()] = ArchiveFolderEntry(
-        path=str(extra),
-        name="Gelendzhik",
-        file_count=7,
-        size_bytes=5 * 1024**2,
+    state.apply_scan(
+        ArchiveScanResult(
+            root_path=str(tmp_path),
+            folders=[
+                *state.folders.values(),
+                ArchiveFolderEntry(
+                    path=str(extra),
+                    name="Gelendzhik",
+                    file_count=7,
+                    size_bytes=5 * 1024**2,
+                ),
+            ],
+            root_file_count=state.root_file_count,
+            root_size_bytes=state.root_size_bytes,
+        )
     )
     monkeypatch.setattr(
         "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
@@ -257,12 +267,12 @@ def test_archive_migration_select_all_uses_corner_checkbox(
     page = ArchiveMigrationPage()
     qtbot.addWidget(page)
 
-    assert page.table.cornerWidget() is page.select_all_check
-    assert page.select_all_check.checkState() == Qt.CheckState.Unchecked
+    assert page.table.horizontalHeader() is page.select_all_header
+    assert page.select_all_header.checkState() == Qt.CheckState.Unchecked
 
-    page.select_all_check.click()
+    page.select_all_header.toggleCheckState()
 
-    assert page.select_all_check.checkState() == Qt.CheckState.Checked
+    assert page.select_all_header.checkState() == Qt.CheckState.Checked
     assert page.table.item(_row_for(page, "Anapa"), 0).checkState() == Qt.CheckState.Checked
     assert (
         page.table.item(_row_for(page, "Gelendzhik"), 0).checkState()
@@ -282,11 +292,21 @@ def test_archive_migration_select_all_respects_filter_and_partial_state(
     state = _state_for(tmp_path)
     extra = tmp_path / "Gelendzhik"
     extra.mkdir()
-    state.folders[str(extra).lower()] = ArchiveFolderEntry(
-        path=str(extra),
-        name="Gelendzhik",
-        file_count=7,
-        size_bytes=5 * 1024**2,
+    state.apply_scan(
+        ArchiveScanResult(
+            root_path=str(tmp_path),
+            folders=[
+                *state.folders.values(),
+                ArchiveFolderEntry(
+                    path=str(extra),
+                    name="Gelendzhik",
+                    file_count=7,
+                    size_bytes=5 * 1024**2,
+                ),
+            ],
+            root_file_count=state.root_file_count,
+            root_size_bytes=state.root_size_bytes,
+        )
     )
     monkeypatch.setattr(
         "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
@@ -300,7 +320,7 @@ def test_archive_migration_select_all_respects_filter_and_partial_state(
     qtbot.addWidget(page)
 
     page.search_edit.setText("Anapa")
-    page.select_all_check.click()
+    page.select_all_header.toggleCheckState()
 
     assert page.table.item(_row_for(page, "Anapa"), 0).checkState() == Qt.CheckState.Checked
     assert (
@@ -309,15 +329,15 @@ def test_archive_migration_select_all_respects_filter_and_partial_state(
     )
 
     page.search_edit.clear()
-    assert page.select_all_check.checkState() == Qt.CheckState.PartiallyChecked
+    assert page.select_all_header.checkState() == Qt.CheckState.PartiallyChecked
 
-    page.select_all_check.click()
-    assert page.select_all_check.checkState() == Qt.CheckState.Checked
+    page.select_all_header.toggleCheckState()
+    assert page.select_all_header.checkState() == Qt.CheckState.Checked
     assert (
         page.table.item(_row_for(page, "Gelendzhik"), 0).checkState()
         == Qt.CheckState.Checked
     )
 
-    page.select_all_check.click()
-    assert page.select_all_check.checkState() == Qt.CheckState.Unchecked
+    page.select_all_header.toggleCheckState()
+    assert page.select_all_header.checkState() == Qt.CheckState.Unchecked
     assert page.selected_folder_paths() == []
