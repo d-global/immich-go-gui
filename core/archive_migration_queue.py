@@ -30,6 +30,8 @@ class ArchiveQueueOptions:
     session_tag: bool = True
     stop_on_error: bool = True
     restore_trashed: bool = False
+    sync_album: bool = False
+    trash_orphaned_extras: bool = False
 
 
 @dataclass
