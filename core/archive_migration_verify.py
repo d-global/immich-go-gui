@@ -209,7 +209,16 @@ def finalize_archive_album_verification(
     Extra server assets are preserved. Archive Migration never deletes them.
     """
 
-    if final.success or not repair.success:
+    if not repair.success:
+        return AlbumVerificationResult(
+            success=False,
+            album_name=final.album_name,
+            expected_assets=final.expected_assets,
+            actual_assets=final.actual_assets,
+            album_id=final.album_id,
+            message=repair.message or final.message,
+        )
+    if final.success:
         return final
 
     actual = final.actual_assets
