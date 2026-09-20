@@ -12,7 +12,8 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from PySide6.QtCore import QRect, Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -27,8 +28,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QStyle,
-    QStyleOptionButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -49,6 +48,7 @@ from core.archive_migration_queue import (
 )
 from core.archive_migration_verify import (
     AlbumVerificationResult,
+    finalize_archive_album_verification,
     repair_archive_album_membership,
     verify_archive_album,
 )
@@ -71,16 +71,22 @@ _TRANSLATIONS = {
         "language": "Language",
         "select": "Select",
         "select_all_tip": "Select or clear all visible queueable folders",
+        "exclude_selected": "Exclude",
+        "exclude_tip": "Persistently mark checked or selected folders as SKIP",
+        "restore_selected": "Restore",
+        "restore_selected_tip": "Return selected SKIP folders to TODO",
+        "open_folder": "Open folder",
+        "open_folder_tip": "Open the current folder in the system file manager",
         "folder": "Folder",
         "files": "Files",
         "size": "Size",
         "status": "Status",
         "selected": "Selected: {folders} folders · {files} files · {size}",
-        "root_files": "Files directly in archive root: {files} · {size} · not included in the folder queue",
+        "root_files": "In folders: {folders} · {files} files · {size} | Root excluded: {root_files} files · {root_size}",
         "no_root": "Choose an archive root, then scan it.",
         "scanning": "Scanning {index}/{total}: {name} · {files} files · {size}",
         "scan_started": "Scanning archive...",
-        "scan_done": "Scan complete: {folders} folders · {files} root files",
+        "scan_done": "Scan complete: {folders} folders",
         "scan_cancelled": "Scan cancelled. Existing state was kept unchanged.",
         "scan_failed": "Archive scan failed",
         "invalid_root": "Choose an existing folder before scanning.",
@@ -118,16 +124,22 @@ _TRANSLATIONS = {
         "language": "Язык",
         "select": "Выбрать",
         "select_all_tip": "Выбрать или снять все видимые папки, доступные для очереди",
+        "exclude_selected": "Исключить",
+        "exclude_tip": "Навсегда пометить отмеченные или выделенные папки как SKIP",
+        "restore_selected": "Вернуть",
+        "restore_selected_tip": "Вернуть выделенные SKIP-папки в TODO",
+        "open_folder": "Открыть папку",
+        "open_folder_tip": "Открыть текущую папку в Проводнике",
         "folder": "Папка",
         "files": "Файлов",
         "size": "Размер",
         "status": "Статус",
         "selected": "Выбрано: {folders} папок · {files} файлов · {size}",
-        "root_files": "Файлы прямо в корне архива: {files} · {size} · в очередь папок не входят",
+        "root_files": "В папках: {folders} · {files} файлов · {size} | В корне вне очереди: {root_files} файлов · {root_size}",
         "no_root": "Выберите корень архива и запустите сканирование.",
         "scanning": "Сканирование {index}/{total}: {name} · {files} файлов · {size}",
         "scan_started": "Сканирование архива...",
-        "scan_done": "Сканирование завершено: {folders} папок · {files} файлов в корне",
+        "scan_done": "Сканирование завершено: {folders} папок",
         "scan_cancelled": "Сканирование остановлено. Старое состояние сохранено без изменений.",
         "scan_failed": "Ошибка сканирования архива",
         "invalid_root": "Перед сканированием выберите существующую папку.",
@@ -166,82 +178,66 @@ class _SortableItem(QTableWidgetItem):
         return super().__lt__(other)
 
 
+class _HeaderCheckBox(QCheckBox):
+    """Native checkbox with predictable partial-state click behavior."""
+
+    def nextCheckState(self) -> None:
+        target = (
+            Qt.CheckState.Unchecked
+            if self.checkState() == Qt.CheckState.Checked
+            else Qt.CheckState.Checked
+        )
+        self.setCheckState(target)
+
+
 class _SelectAllHeader(QHeaderView):
-    """Header with a tri-state checkbox in the first table section."""
+    """Header with a real native checkbox in the first table section."""
 
     check_state_changed = Signal(int)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(Qt.Orientation.Horizontal, parent)
-        self._check_state = Qt.CheckState.Unchecked
-        self.setSectionsClickable(True)
+        self.checkbox = _HeaderCheckBox(self.viewport())
+        self.checkbox.setTristate(True)
+        self.checkbox.setCheckState(Qt.CheckState.Unchecked)
+        self.checkbox.stateChanged.connect(self.check_state_changed)
+        self.sectionResized.connect(lambda *_args: self._position_checkbox())
+        self.geometriesChanged.connect(self._position_checkbox)
+        self._position_checkbox()
 
     def checkState(self) -> Qt.CheckState:
-        return self._check_state
+        return self.checkbox.checkState()
 
     def setCheckState(self, state: Qt.CheckState) -> None:
-        state = Qt.CheckState(state)
-        if state == self._check_state:
-            return
-        self._check_state = state
-        self.viewport().update()
+        self.checkbox.blockSignals(True)
+        try:
+            self.checkbox.setCheckState(Qt.CheckState(state))
+        finally:
+            self.checkbox.blockSignals(False)
 
     def toggleCheckState(self) -> None:
-        target = (
-            Qt.CheckState.Unchecked
-            if self._check_state == Qt.CheckState.Checked
-            else Qt.CheckState.Checked
-        )
-        self.setCheckState(target)
-        self.check_state_changed.emit(target.value)
+        self.checkbox.nextCheckState()
 
-    def _checkbox_rect(self, section_rect: QRect) -> QRect:
-        option = QStyleOptionButton()
-        indicator = self.style().subElementRect(
-            QStyle.SubElement.SE_CheckBoxIndicator,
-            option,
-            self,
-        )
-        x = section_rect.left() + 6
-        y = section_rect.top() + (section_rect.height() - indicator.height()) // 2
-        return QRect(x, y, indicator.width(), indicator.height())
+    def setEnabled(self, enabled: bool) -> None:
+        super().setEnabled(enabled)
+        self.checkbox.setEnabled(enabled)
 
-    def paintSection(self, painter, rect: QRect, logical_index: int) -> None:
-        super().paintSection(painter, rect, logical_index)
-        if logical_index != 0:
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_checkbox()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._position_checkbox()
+        self.checkbox.show()
+
+    def _position_checkbox(self) -> None:
+        if not hasattr(self, "checkbox"):
             return
-
-        option = QStyleOptionButton()
-        option.rect = self._checkbox_rect(rect)
-        option.state = QStyle.StateFlag.State_Enabled
-        if self._check_state == Qt.CheckState.Checked:
-            option.state |= QStyle.StateFlag.State_On
-        elif self._check_state == Qt.CheckState.PartiallyChecked:
-            option.state |= QStyle.StateFlag.State_NoChange
-        else:
-            option.state |= QStyle.StateFlag.State_Off
-        self.style().drawControl(
-            QStyle.ControlElement.CE_CheckBox,
-            option,
-            painter,
-            self,
-        )
-
-    def mousePressEvent(self, event) -> None:
-        point = event.position().toPoint()
-        logical_index = self.logicalIndexAt(point)
-        if logical_index == 0:
-            section_rect = QRect(
-                self.sectionViewportPosition(0),
-                0,
-                self.sectionSize(0),
-                self.height(),
-            )
-            if self._checkbox_rect(section_rect).contains(point):
-                self.toggleCheckState()
-                event.accept()
-                return
-        super().mousePressEvent(event)
+        hint = self.checkbox.sizeHint()
+        x = self.sectionViewportPosition(0) + 6
+        y = max(0, (self.height() - hint.height()) // 2)
+        self.checkbox.setGeometry(x, y, hint.width(), hint.height())
 
 
 class _ArchiveScanThread(QThread):
@@ -370,7 +366,7 @@ class _ArchiveQueueThread(QThread):
             not verification.success
             and verification.album_id is not None
             and isinstance(verification.actual_assets, int)
-            and verification.actual_assets < expected_assets
+            and verification.actual_assets != expected_assets
             and not self._cancel_event.is_set()
         )
         if not can_repair:
@@ -378,7 +374,7 @@ class _ArchiveQueueThread(QThread):
 
         self.log_line.emit(
             item.name,
-            "Album is under-filled; starting targeted membership repair",
+            "Album count differs; checking source membership by SHA1",
         )
         repair = repair_archive_album_membership(
             self.server_url,
@@ -403,10 +399,12 @@ class _ArchiveQueueThread(QThread):
             skip_ssl=self.skip_ssl,
         )
         self.log_line.emit(item.name, f"Post-repair: {final.message}")
-        if final.success:
-            return final
+        reconciled = finalize_archive_album_verification(final, repair)
+        self.log_line.emit(item.name, f"Membership result: {reconciled.message}")
+        if reconciled.success:
+            return reconciled
 
-        message = final.message
+        message = reconciled.message
         if repair.blocked_assets:
             message += (
                 f"; {repair.blocked_assets} assets were rejected with no_permission"
@@ -415,10 +413,10 @@ class _ArchiveQueueThread(QThread):
             message += f"; {repair.trashed_assets} assets are in trash"
         return AlbumVerificationResult(
             success=False,
-            album_name=final.album_name,
-            expected_assets=final.expected_assets,
-            actual_assets=final.actual_assets,
-            album_id=final.album_id,
+            album_name=reconciled.album_name,
+            expected_assets=reconciled.expected_assets,
+            actual_assets=reconciled.actual_assets,
+            album_id=reconciled.album_id,
             message=message,
         )
 
@@ -566,6 +564,18 @@ class ArchiveMigrationPage(QWidget):
         self.hide_done_check.setChecked(True)
         self.hide_done_check.toggled.connect(self._apply_filters)
         filter_row.addWidget(self.hide_done_check)
+
+        self.open_folder_button = QPushButton()
+        self.open_folder_button.clicked.connect(self.open_current_folder)
+        filter_row.addWidget(self.open_folder_button)
+
+        self.exclude_button = QPushButton()
+        self.exclude_button.clicked.connect(self.exclude_selected_folders)
+        filter_row.addWidget(self.exclude_button)
+
+        self.restore_skip_button = QPushButton()
+        self.restore_skip_button.clicked.connect(self.restore_selected_skips)
+        filter_row.addWidget(self.restore_skip_button)
         outer.addLayout(filter_row)
 
         queue_frame = QFrame()
@@ -638,6 +648,8 @@ class ArchiveMigrationPage(QWidget):
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.table.itemChanged.connect(self._on_table_item_changed)
+        self.table.itemSelectionChanged.connect(self._update_folder_action_buttons)
+        self.table.itemDoubleClicked.connect(self._on_table_item_double_clicked)
         outer.addWidget(self.table, 1)
 
         summary_row = QHBoxLayout()
@@ -698,6 +710,12 @@ class ArchiveMigrationPage(QWidget):
         self.restore_trashed_check.setText(self._tr("restore_trashed"))
         self.restore_trashed_check.setToolTip(self._tr("restore_trashed_tip"))
         self.select_all_header.setToolTip(self._tr("select_all_tip"))
+        self.open_folder_button.setText(self._tr("open_folder"))
+        self.open_folder_button.setToolTip(self._tr("open_folder_tip"))
+        self.exclude_button.setText(self._tr("exclude_selected"))
+        self.exclude_button.setToolTip(self._tr("exclude_tip"))
+        self.restore_skip_button.setText(self._tr("restore_selected"))
+        self.restore_skip_button.setToolTip(self._tr("restore_selected_tip"))
         self.queue_start_button.setText(self._tr("start_queue"))
         self.queue_cancel_button.setText(self._tr("cancel_queue"))
         self.queue_log.setPlaceholderText(self._tr("queue_log"))
@@ -928,12 +946,16 @@ class ArchiveMigrationPage(QWidget):
         self.session_tag_check.setEnabled(not running)
         self.stop_on_error_check.setEnabled(not running)
         self.restore_trashed_check.setEnabled(not running)
+        self.open_folder_button.setEnabled(not running and bool(self._current_folder_path()))
+        self.exclude_button.setEnabled(not running)
+        self.restore_skip_button.setEnabled(not running)
         self.queue_cancel_button.setVisible(running)
         self.queue_cancel_button.setEnabled(running)
         if running:
             self.queue_start_button.setEnabled(False)
         else:
             self._update_selection_summary()
+            self._update_folder_action_buttons()
 
     def _on_queue_progress(
         self, index: int, total: int, path: str, name: str, status: str
@@ -1124,6 +1146,102 @@ class ArchiveMigrationPage(QWidget):
         finally:
             self._syncing_select_all = False
 
+    def _selected_row_paths(self) -> list[str]:
+        paths: list[str] = []
+        seen: set[str] = set()
+        selection = self.table.selectionModel()
+        if selection is None:
+            return paths
+        for index in selection.selectedRows():
+            item = self.table.item(index.row(), 0)
+            path = str(item.data(Qt.ItemDataRole.UserRole) or "") if item else ""
+            if path and path not in seen:
+                seen.add(path)
+                paths.append(path)
+        return paths
+
+    def _action_paths(self) -> list[str]:
+        checked = self.selected_folder_paths()
+        return checked if checked else self._selected_row_paths()
+
+    def _current_folder_path(self) -> str:
+        selected = self._selected_row_paths()
+        if selected:
+            return selected[0]
+        checked = self.selected_folder_paths()
+        return checked[0] if len(checked) == 1 else ""
+
+    def _update_folder_action_buttons(self) -> None:
+        if not hasattr(self, "open_folder_button"):
+            return
+        queue_running = (
+            self._queue_thread is not None and self._queue_thread.isRunning()
+        )
+        current = self._current_folder_path()
+        action_paths = self._action_paths()
+        self.open_folder_button.setEnabled(bool(current) and not queue_running)
+        self.exclude_button.setEnabled(
+            bool(action_paths)
+            and not queue_running
+            and any(
+                (entry := self.state.get(path)) is not None
+                and entry.status
+                not in {ArchiveFolderStatus.DONE, ArchiveFolderStatus.SKIP}
+                for path in action_paths
+            )
+        )
+        self.restore_skip_button.setEnabled(
+            bool(action_paths)
+            and not queue_running
+            and any(
+                (entry := self.state.get(path)) is not None
+                and entry.status == ArchiveFolderStatus.SKIP
+                for path in action_paths
+            )
+        )
+
+    def open_current_folder(self) -> None:
+        path = self._current_folder_path()
+        if not path or not Path(path).is_dir():
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def _on_table_item_double_clicked(self, item: QTableWidgetItem) -> None:
+        if item.column() == 1:
+            self.open_current_folder()
+
+    def exclude_selected_folders(self) -> None:
+        changed = False
+        for path in self._action_paths():
+            entry = self.state.get(path)
+            if entry is None or entry.status in {
+                ArchiveFolderStatus.DONE,
+                ArchiveFolderStatus.SKIP,
+                ArchiveFolderStatus.UPLOADING,
+            }:
+                continue
+            entry.status = ArchiveFolderStatus.SKIP
+            entry.last_error = None
+            changed = True
+        if not changed:
+            return
+        ArchiveMigrationStateStore.save(self.state, self.profile_name)
+        self._populate_table()
+
+    def restore_selected_skips(self) -> None:
+        changed = False
+        for path in self._selected_row_paths():
+            entry = self.state.get(path)
+            if entry is None or entry.status != ArchiveFolderStatus.SKIP:
+                continue
+            entry.status = ArchiveFolderStatus.TODO
+            entry.last_error = None
+            changed = True
+        if not changed:
+            return
+        ArchiveMigrationStateStore.save(self.state, self.profile_name)
+        self._populate_table()
+
     def selected_folder_paths(self) -> list[str]:
         paths: list[str] = []
         for row in range(self.table.rowCount()):
@@ -1155,15 +1273,22 @@ class ArchiveMigrationPage(QWidget):
         )
         self.queue_start_button.setEnabled(folders > 0 and not queue_running)
         self._sync_select_all_checkbox()
+        self._update_folder_action_buttons()
 
     def _update_root_files_label(self) -> None:
         if not hasattr(self, "root_files_label"):
             return
+        folder_entries = list(self.state.folders.values())
+        total_files = sum(entry.file_count for entry in folder_entries)
+        total_size = sum(entry.size_bytes for entry in folder_entries)
         self.root_files_label.setText(
             self._tr(
                 "root_files",
-                files=self.state.root_file_count,
-                size=_format_bytes(self.state.root_size_bytes),
+                folders=len(folder_entries),
+                files=total_files,
+                size=_format_bytes(total_size),
+                root_files=self.state.root_file_count,
+                root_size=_format_bytes(self.state.root_size_bytes),
             )
         )
 
