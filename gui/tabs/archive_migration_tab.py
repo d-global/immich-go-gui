@@ -68,6 +68,7 @@ _TRANSLATIONS = {
         "hide_done": "Hide DONE",
         "language": "Language",
         "select": "Select",
+        "select_all_tip": "Select or clear all visible queueable folders",
         "folder": "Folder",
         "files": "Files",
         "size": "Size",
@@ -114,6 +115,7 @@ _TRANSLATIONS = {
         "hide_done": "Скрыть DONE",
         "language": "Язык",
         "select": "Выбрать",
+        "select_all_tip": "Выбрать или снять все видимые папки, доступные для очереди",
         "folder": "Папка",
         "files": "Файлов",
         "size": "Размер",
@@ -160,6 +162,18 @@ class _SortableItem(QTableWidgetItem):
         if mine is not None and theirs is not None:
             return mine < theirs
         return super().__lt__(other)
+
+
+class _SelectAllCheckBox(QCheckBox):
+    """Two-state user toggle that can display a programmatic partial state."""
+
+    def nextCheckState(self) -> None:
+        target = (
+            Qt.CheckState.Unchecked
+            if self.checkState() == Qt.CheckState.Checked
+            else Qt.CheckState.Checked
+        )
+        self.setCheckState(target)
 
 
 class _ArchiveScanThread(QThread):
@@ -527,6 +541,12 @@ class ArchiveMigrationPage(QWidget):
         outer.addWidget(queue_frame)
 
         self.table = QTableWidget(0, 5)
+        self.select_all_check = _SelectAllCheckBox()
+        self.select_all_check.setTristate(True)
+        self.select_all_check.setCheckState(Qt.CheckState.Unchecked)
+        self.select_all_check.stateChanged.connect(self._on_select_all_changed)
+        self.table.setCornerWidget(self.select_all_check)
+        self._syncing_select_all = False
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
@@ -598,6 +618,7 @@ class ArchiveMigrationPage(QWidget):
         self.stop_on_error_check.setText(self._tr("stop_on_error"))
         self.restore_trashed_check.setText(self._tr("restore_trashed"))
         self.restore_trashed_check.setToolTip(self._tr("restore_trashed_tip"))
+        self.select_all_check.setToolTip(self._tr("select_all_tip"))
         self.queue_start_button.setText(self._tr("start_queue"))
         self.queue_cancel_button.setText(self._tr("cancel_queue"))
         self.queue_log.setPlaceholderText(self._tr("queue_log"))
@@ -823,6 +844,7 @@ class ArchiveMigrationPage(QWidget):
         self.choose_button.setEnabled(not running)
         self.scan_button.setEnabled(not running)
         self.table.setEnabled(not running)
+        self.select_all_check.setEnabled(not running)
         self.queue_tag_edit.setEnabled(not running)
         self.session_tag_check.setEnabled(not running)
         self.stop_on_error_check.setEnabled(not running)
@@ -970,6 +992,58 @@ class ArchiveMigrationPage(QWidget):
         if item.column() == 0:
             self._update_selection_summary()
 
+    def _visible_queueable_check_items(self) -> list[QTableWidgetItem]:
+        items: list[QTableWidgetItem] = []
+        for row in range(self.table.rowCount()):
+            if self.table.isRowHidden(row):
+                continue
+            item = self.table.item(row, 0)
+            if item is None:
+                continue
+            if not bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+                continue
+            items.append(item)
+        return items
+
+    def _on_select_all_changed(self, state: int) -> None:
+        if self._syncing_select_all:
+            return
+        target = Qt.CheckState.Checked if state == Qt.CheckState.Checked.value else Qt.CheckState.Unchecked
+        self.table.blockSignals(True)
+        try:
+            for item in self._visible_queueable_check_items():
+                item.setCheckState(target)
+        finally:
+            self.table.blockSignals(False)
+        self._update_selection_summary()
+
+    def _sync_select_all_checkbox(self) -> None:
+        if not hasattr(self, "select_all_check"):
+            return
+        items = self._visible_queueable_check_items()
+        checked = sum(
+            item.checkState() == Qt.CheckState.Checked for item in items
+        )
+        if not items or checked == 0:
+            state = Qt.CheckState.Unchecked
+        elif checked == len(items):
+            state = Qt.CheckState.Checked
+        else:
+            state = Qt.CheckState.PartiallyChecked
+
+        self._syncing_select_all = True
+        try:
+            self.select_all_check.setCheckState(state)
+            self.select_all_check.setEnabled(
+                bool(items)
+                and not (
+                    self._queue_thread is not None
+                    and self._queue_thread.isRunning()
+                )
+            )
+        finally:
+            self._syncing_select_all = False
+
     def selected_folder_paths(self) -> list[str]:
         paths: list[str] = []
         for row in range(self.table.rowCount()):
@@ -1000,6 +1074,7 @@ class ArchiveMigrationPage(QWidget):
             self._queue_thread is not None and self._queue_thread.isRunning()
         )
         self.queue_start_button.setEnabled(folders > 0 and not queue_running)
+        self._sync_select_all_checkbox()
 
     def _update_root_files_label(self) -> None:
         if not hasattr(self, "root_files_label"):
