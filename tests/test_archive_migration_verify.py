@@ -355,7 +355,6 @@ def test_repair_reports_missing_delete_permission_for_targeted_restore(
     assert "asset.delete permission" in result.message
 
 
-
 def test_finalize_accepts_verified_membership_with_extra_album_assets():
     initial = AlbumVerificationResult(
         success=False,
@@ -396,8 +395,7 @@ def test_finalize_keeps_failure_when_membership_repair_did_not_prove_source():
         already_present=10,
     )
 
-    assert finalize_archive_album_verification(initial, repair) is initial
-
+    assert finalize_archive_album_verification(initial, repair) == initial
 
 
 def test_finalize_repair_failure_overrides_matching_count():
