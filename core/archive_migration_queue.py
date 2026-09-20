@@ -238,9 +238,7 @@ def run_archive_queue(
         except Exception as exc:
             result = _FailedExecutionResult(str(exc))
 
-        cancelled_current = (
-            cancel_event is not None and cancel_event.is_set()
-        )
+        cancelled_current = cancel_event is not None and cancel_event.is_set()
 
         verification = None
         if result.success and verify is not None and not cancelled_current:
