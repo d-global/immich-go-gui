@@ -369,3 +369,132 @@ def test_archive_migration_compact_layout_prioritizes_table(
     assert page.queue_log.maximumHeight() == 78
     assert page.queue_log.minimumHeight() == 58
     assert page.table.minimumHeight() == 280
+
+
+
+def test_archive_migration_shows_total_folder_inventory(tmp_path, monkeypatch, qtbot):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+    page.language_combo.setCurrentIndex(page.language_combo.findData("ru"))
+
+    text = page.root_files_label.text()
+    assert "В папках: 2" in text
+    assert "150 файлов" in text
+    assert "356.00 MB" in text
+    assert "В корне вне очереди: 2 файлов" in text
+
+
+def test_archive_migration_exclude_is_persistent_skip(
+    tmp_path, monkeypatch, qtbot
+):
+    state = _state_for(tmp_path)
+    saves = []
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.save",
+        lambda current, profile: saves.append((current, profile)),
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+    row = _row_for(page, "Anapa")
+    page.table.item(row, 0).setCheckState(Qt.CheckState.Checked)
+
+    page.exclude_selected_folders()
+
+    assert state.get(str(tmp_path / "Anapa")).status == ArchiveFolderStatus.SKIP
+    assert saves
+    row = _row_for(page, "Anapa")
+    assert page.table.item(row, 4).text() == "SKIP"
+    assert not bool(
+        page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable
+    )
+
+
+def test_archive_migration_restore_skip_to_todo(tmp_path, monkeypatch, qtbot):
+    state = _state_for(tmp_path)
+    state.get(str(tmp_path / "Anapa")).status = ArchiveFolderStatus.SKIP
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.save",
+        lambda *_: None,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+    row = _row_for(page, "Anapa")
+    page.table.selectRow(row)
+
+    page.restore_selected_skips()
+
+    assert state.get(str(tmp_path / "Anapa")).status == ArchiveFolderStatus.TODO
+
+
+def test_archive_migration_open_folder_uses_system_file_manager(
+    tmp_path, monkeypatch, qtbot
+):
+    state = _state_for(tmp_path)
+    opened = []
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toLocalFile()) or True,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+    row = _row_for(page, "Anapa")
+    page.table.selectRow(row)
+
+    page.open_current_folder()
+
+    assert opened == [str(tmp_path / "Anapa")]
+
+
+def test_select_all_header_uses_real_native_checkbox(tmp_path, monkeypatch, qtbot):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+    page.show()
+    qtbot.wait(20)
+
+    checkbox = page.select_all_header.checkbox
+    assert checkbox.parent() is page.select_all_header.viewport()
+    assert checkbox.width() > 0
+    assert checkbox.height() > 0
+    assert checkbox.isVisible()
