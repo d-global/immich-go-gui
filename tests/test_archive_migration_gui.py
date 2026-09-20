@@ -324,7 +324,10 @@ def test_archive_migration_select_all_respects_filter_and_partial_state(
     page.search_edit.setText("Anapa")
     page.select_all_header.toggleCheckState()
 
-    assert page.table.item(_row_for(page, "Anapa"), 0).checkState() == Qt.CheckState.Checked
+    assert (
+        page.table.item(_row_for(page, "Anapa"), 0).checkState()
+        == Qt.CheckState.Checked
+    )
     assert (
         page.table.item(_row_for(page, "Gelendzhik"), 0).checkState()
         == Qt.CheckState.Unchecked
