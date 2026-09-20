@@ -233,8 +233,7 @@ def test_format_bytes_is_human_readable():
     assert _format_bytes(1024**3) == "1.00 GB"
 
 
-
-def test_archive_migration_select_all_uses_corner_checkbox(
+def test_archive_migration_select_all_uses_header_checkbox(
     tmp_path, monkeypatch, qtbot
 ):
     state = _state_for(tmp_path)
@@ -273,7 +272,10 @@ def test_archive_migration_select_all_uses_corner_checkbox(
     page.select_all_header.toggleCheckState()
 
     assert page.select_all_header.checkState() == Qt.CheckState.Checked
-    assert page.table.item(_row_for(page, "Anapa"), 0).checkState() == Qt.CheckState.Checked
+    assert (
+        page.table.item(_row_for(page, "Anapa"), 0).checkState()
+        == Qt.CheckState.Checked
+    )
     assert (
         page.table.item(_row_for(page, "Gelendzhik"), 0).checkState()
         == Qt.CheckState.Checked
