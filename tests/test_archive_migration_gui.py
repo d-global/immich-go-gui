@@ -524,7 +524,6 @@ def test_archive_cleanup_options_are_dependency_safe(tmp_path, monkeypatch, qtbo
     assert page.trash_orphaned_check.isEnabled() is False
 
 
-
 def test_archive_migration_recheck_done_to_partial(tmp_path, monkeypatch, qtbot):
     state = _state_for(tmp_path)
     monkeypatch.setattr(
@@ -552,6 +551,4 @@ def test_archive_migration_recheck_done_to_partial(tmp_path, monkeypatch, qtbot)
     assert entry.status == ArchiveFolderStatus.PARTIAL
     row = _row_for(page, "Azov")
     assert page.table.item(row, 4).text() == "PARTIAL"
-    assert bool(
-        page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable
-    )
+    assert bool(page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable)
