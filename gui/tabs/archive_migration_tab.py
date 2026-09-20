@@ -50,6 +50,7 @@ from core.archive_migration_verify import (
     AlbumVerificationResult,
     finalize_archive_album_verification,
     repair_archive_album_membership,
+    synchronize_archive_album_to_source,
     verify_archive_album,
 )
 from core.config_manager import default_config_dir
@@ -97,6 +98,14 @@ _TRANSLATIONS = {
         "restore_trashed": "Restore matching duplicates from Immich trash",
         "restore_trashed_tip": "Restores only trash assets whose SHA1 matches files in the selected source folder.",
         "restore_trashed_enabled": "Targeted restore of matching trash duplicates is enabled.",
+        "sync_album": "Sync album to folder",
+        "sync_album_tip": "Remove target-album assets that are not present in the canonical local folder.",
+        "trash_orphaned_extras": "Trash extras unused by other albums",
+        "trash_orphaned_tip": "After sync, move an extra asset to Immich Trash only when it belongs to no other album.",
+        "sync_album_enabled": "Exact album-to-folder synchronization is enabled.",
+        "trash_orphaned_enabled": "Orphaned album extras will be moved to Immich Trash after cross-album checks.",
+        "cleanup_confirm_title": "Immich cleanup",
+        "cleanup_confirm_text": "After album sync, extra assets that are not used by any other album will be moved to Immich Trash. Continue?",
         "start_queue": "Upload selected",
         "cancel_queue": "Cancel queue",
         "queue_idle": "Select folders to prepare the migration queue.",
@@ -150,6 +159,14 @@ _TRANSLATIONS = {
         "restore_trashed": "Восстанавливать найденные дубли из корзины",
         "restore_trashed_tip": "Восстанавливаются только assets из корзины, SHA1 которых совпал с файлами выбранной исходной папки.",
         "restore_trashed_enabled": "Включено точечное восстановление найденных дублей из корзины.",
+        "sync_album": "Синхронизировать альбом",
+        "sync_album_tip": "Убирает из целевого альбома assets, которых нет в канонической локальной папке.",
+        "trash_orphaned_extras": "Лишнее без других альбомов → в корзину",
+        "trash_orphaned_tip": "После синхронизации лишний asset попадёт в корзину Immich только если он не состоит ни в одном другом альбоме.",
+        "sync_album_enabled": "Включена точная синхронизация альбома с локальной папкой.",
+        "trash_orphaned_enabled": "Лишние assets без других альбомов будут перемещены в корзину Immich после проверки связей.",
+        "cleanup_confirm_title": "Очистка Immich",
+        "cleanup_confirm_text": "После синхронизации лишние assets, которые не используются ни в одном другом альбоме, будут перемещены в корзину Immich. Продолжить?",
         "start_queue": "Загрузить выбранное",
         "cancel_queue": "Остановить очередь",
         "queue_idle": "Выберите папки для подготовки очереди миграции.",
@@ -291,6 +308,8 @@ class _ArchiveQueueThread(QThread):
         skip_ssl: bool,
         stop_on_error: bool,
         restore_trashed: bool,
+        sync_album: bool,
+        trash_orphaned_extras: bool,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -304,6 +323,8 @@ class _ArchiveQueueThread(QThread):
         self.skip_ssl = skip_ssl
         self.stop_on_error = stop_on_error
         self.restore_trashed = restore_trashed
+        self.sync_album = sync_album
+        self.trash_orphaned_extras = trash_orphaned_extras
         self._cancel_event = threading.Event()
         self.runner_state = RunnerState()
 
@@ -363,7 +384,9 @@ class _ArchiveQueueThread(QThread):
         self.log_line.emit(item.name, verification.message)
 
         server_duplicates = int(getattr(result, "files_skipped", 0) or 0)
-        needs_membership_check = not verification.success or server_duplicates > 0
+        needs_membership_check = (
+            not verification.success or server_duplicates > 0 or self.sync_album
+        )
         can_repair = (
             needs_membership_check
             and verification.album_id is not None
@@ -373,11 +396,12 @@ class _ArchiveQueueThread(QThread):
         if not can_repair:
             return verification
 
-        reason = (
-            "Album count differs"
-            if not verification.success
-            else f"{server_duplicates} server duplicates need membership proof"
-        )
+        if not verification.success:
+            reason = "Album count differs"
+        elif server_duplicates > 0:
+            reason = f"{server_duplicates} server duplicates need membership proof"
+        else:
+            reason = "Album synchronization needs canonical source IDs"
         self.log_line.emit(
             item.name,
             f"{reason}; checking source membership by SHA1",
@@ -407,6 +431,41 @@ class _ArchiveQueueThread(QThread):
         self.log_line.emit(item.name, f"Post-repair: {final.message}")
         reconciled = finalize_archive_album_verification(final, repair)
         self.log_line.emit(item.name, f"Membership result: {reconciled.message}")
+        if reconciled.success and self.sync_album:
+            sync_result = synchronize_archive_album_to_source(
+                self.server_url,
+                self.api_key,
+                verification.album_id or "",
+                repair.resolved_asset_ids,
+                trash_orphaned_extras=self.trash_orphaned_extras,
+                skip_ssl=self.skip_ssl,
+                cancel_event=self._cancel_event,
+                on_log=lambda message: self.log_line.emit(item.name, message),
+            )
+            self.log_line.emit(item.name, sync_result.message)
+            for detail in sync_result.details:
+                self.log_line.emit(item.name, f"Cleanup detail: {detail}")
+
+            if not sync_result.success:
+                return AlbumVerificationResult(
+                    success=False,
+                    album_name=reconciled.album_name,
+                    expected_assets=reconciled.expected_assets,
+                    actual_assets=sync_result.album_assets_after,
+                    album_id=reconciled.album_id,
+                    message=sync_result.message,
+                )
+
+            exact = verify_archive_album(
+                self.server_url,
+                self.api_key,
+                item.album_name,
+                expected_assets,
+                skip_ssl=self.skip_ssl,
+            )
+            self.log_line.emit(item.name, f"Post-sync: {exact.message}")
+            return exact
+
         if reconciled.success:
             return reconciled
 
@@ -603,9 +662,6 @@ class ArchiveMigrationPage(QWidget):
         self.stop_on_error_check = QCheckBox()
         self.stop_on_error_check.setChecked(True)
         queue_controls.addWidget(self.stop_on_error_check)
-        self.restore_trashed_check = QCheckBox()
-        self.restore_trashed_check.setChecked(False)
-        queue_controls.addWidget(self.restore_trashed_check)
         self.queue_start_button = QPushButton()
         self.queue_start_button.setObjectName("BtnRun")
         self.queue_start_button.clicked.connect(self.start_queue)
@@ -616,6 +672,24 @@ class ArchiveMigrationPage(QWidget):
         self.queue_cancel_button.setVisible(False)
         queue_controls.addWidget(self.queue_cancel_button)
         queue_layout.addLayout(queue_controls)
+
+        cleanup_controls = QHBoxLayout()
+        cleanup_controls.setSpacing(12)
+        self.restore_trashed_check = QCheckBox()
+        self.restore_trashed_check.setChecked(False)
+        cleanup_controls.addWidget(self.restore_trashed_check)
+
+        self.sync_album_check = QCheckBox()
+        self.sync_album_check.setChecked(False)
+        self.sync_album_check.toggled.connect(self._on_sync_album_toggled)
+        cleanup_controls.addWidget(self.sync_album_check)
+
+        self.trash_orphaned_check = QCheckBox()
+        self.trash_orphaned_check.setChecked(False)
+        self.trash_orphaned_check.setEnabled(False)
+        cleanup_controls.addWidget(self.trash_orphaned_check)
+        cleanup_controls.addStretch()
+        queue_layout.addLayout(cleanup_controls)
 
         queue_progress_row = QHBoxLayout()
         queue_progress_row.setSpacing(10)
@@ -715,6 +789,10 @@ class ArchiveMigrationPage(QWidget):
         self.stop_on_error_check.setText(self._tr("stop_on_error"))
         self.restore_trashed_check.setText(self._tr("restore_trashed"))
         self.restore_trashed_check.setToolTip(self._tr("restore_trashed_tip"))
+        self.sync_album_check.setText(self._tr("sync_album"))
+        self.sync_album_check.setToolTip(self._tr("sync_album_tip"))
+        self.trash_orphaned_check.setText(self._tr("trash_orphaned_extras"))
+        self.trash_orphaned_check.setToolTip(self._tr("trash_orphaned_tip"))
         self.select_all_header.setToolTip(self._tr("select_all_tip"))
         self.open_folder_button.setText(self._tr("open_folder"))
         self.open_folder_button.setToolTip(self._tr("open_folder_tip"))
@@ -829,6 +907,12 @@ class ArchiveMigrationPage(QWidget):
         if thread is not None:
             thread.deleteLater()
 
+    def _on_sync_album_toggled(self, checked: bool) -> None:
+        running = self._queue_thread is not None and self._queue_thread.isRunning()
+        self.trash_orphaned_check.setEnabled(checked and not running)
+        if not checked:
+            self.trash_orphaned_check.setChecked(False)
+
     def start_queue(self) -> None:
         if self._queue_thread is not None and self._queue_thread.isRunning():
             return
@@ -875,7 +959,23 @@ class ArchiveMigrationPage(QWidget):
                 session_tag=self.session_tag_check.isChecked(),
                 stop_on_error=self.stop_on_error_check.isChecked(),
                 restore_trashed=self.restore_trashed_check.isChecked(),
+                sync_album=(
+                    self.sync_album_check.isChecked()
+                    or self.trash_orphaned_check.isChecked()
+                ),
+                trash_orphaned_extras=self.trash_orphaned_check.isChecked(),
             )
+            if options.trash_orphaned_extras:
+                answer = QMessageBox.question(
+                    self,
+                    self._tr("cleanup_confirm_title"),
+                    self._tr("cleanup_confirm_text"),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+
             items = build_archive_queue_items(
                 self.state,
                 selected_paths,
@@ -911,6 +1011,10 @@ class ArchiveMigrationPage(QWidget):
         self._append_queue_log("", f"Queue prepared: {len(items)} folders")
         if options.restore_trashed:
             self._append_queue_log("", self._tr("restore_trashed_enabled"))
+        if options.sync_album:
+            self._append_queue_log("", self._tr("sync_album_enabled"))
+        if options.trash_orphaned_extras:
+            self._append_queue_log("", self._tr("trash_orphaned_enabled"))
 
         thread = _ArchiveQueueThread(
             state=self.state,
@@ -923,6 +1027,8 @@ class ArchiveMigrationPage(QWidget):
             skip_ssl=bool(config_state.get("skip-ssl", False)),
             stop_on_error=options.stop_on_error,
             restore_trashed=options.restore_trashed,
+            sync_album=options.sync_album,
+            trash_orphaned_extras=options.trash_orphaned_extras,
             parent=self,
         )
         self._queue_thread = thread
@@ -952,6 +1058,10 @@ class ArchiveMigrationPage(QWidget):
         self.session_tag_check.setEnabled(not running)
         self.stop_on_error_check.setEnabled(not running)
         self.restore_trashed_check.setEnabled(not running)
+        self.sync_album_check.setEnabled(not running)
+        self.trash_orphaned_check.setEnabled(
+            not running and self.sync_album_check.isChecked()
+        )
         self.open_folder_button.setEnabled(
             not running and bool(self._current_folder_path())
         )
