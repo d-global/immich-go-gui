@@ -610,9 +610,7 @@ class ArchiveMigrationPage(QWidget):
 
         self.table = QTableWidget(0, 5)
         self.select_all_header = _SelectAllHeader(self.table)
-        self.select_all_header.check_state_changed.connect(
-            self._on_select_all_changed
-        )
+        self.select_all_header.check_state_changed.connect(self._on_select_all_changed)
         self.table.setHorizontalHeader(self.select_all_header)
         self._syncing_select_all = False
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -1093,9 +1091,7 @@ class ArchiveMigrationPage(QWidget):
         if not hasattr(self, "select_all_header"):
             return
         items = self._visible_queueable_check_items()
-        checked = sum(
-            item.checkState() == Qt.CheckState.Checked for item in items
-        )
+        checked = sum(item.checkState() == Qt.CheckState.Checked for item in items)
         if not items or checked == 0:
             state = Qt.CheckState.Unchecked
         elif checked == len(items):
@@ -1109,8 +1105,7 @@ class ArchiveMigrationPage(QWidget):
             self.select_all_header.setEnabled(
                 bool(items)
                 and not (
-                    self._queue_thread is not None
-                    and self._queue_thread.isRunning()
+                    self._queue_thread is not None and self._queue_thread.isRunning()
                 )
             )
         finally:
