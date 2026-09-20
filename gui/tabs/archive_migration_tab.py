@@ -1076,7 +1076,11 @@ class ArchiveMigrationPage(QWidget):
     def _on_select_all_changed(self, state: int) -> None:
         if self._syncing_select_all:
             return
-        target = Qt.CheckState.Checked if state == Qt.CheckState.Checked.value else Qt.CheckState.Unchecked
+        target = (
+            Qt.CheckState.Checked
+            if state == Qt.CheckState.Checked.value
+            else Qt.CheckState.Unchecked
+        )
         self.table.blockSignals(True)
         try:
             for item in self._visible_queueable_check_items():
@@ -1086,7 +1090,7 @@ class ArchiveMigrationPage(QWidget):
         self._update_selection_summary()
 
     def _sync_select_all_checkbox(self) -> None:
-        if not hasattr(self, "select_all_check"):
+        if not hasattr(self, "select_all_header"):
             return
         items = self._visible_queueable_check_items()
         checked = sum(
