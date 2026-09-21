@@ -218,9 +218,16 @@ class _SelectAllHeader(QHeaderView):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(Qt.Orientation.Horizontal, parent)
+        self.setSectionsClickable(True)
+        self.setSortIndicatorShown(True)
         self.checkbox = _HeaderCheckBox(self.viewport())
         self.checkbox.setTristate(True)
         self.checkbox.setCheckState(Qt.CheckState.Unchecked)
+        self.checkbox.setFixedSize(16, 16)
+        self.checkbox.setStyleSheet(
+            "QCheckBox { padding: 0; margin: 0; }"
+            "QCheckBox::indicator { width: 13px; height: 13px; }"
+        )
         self.checkbox.stateChanged.connect(self.check_state_changed)
         self.sectionResized.connect(lambda *_args: self._position_checkbox())
         self.geometriesChanged.connect(self._position_checkbox)
@@ -255,10 +262,9 @@ class _SelectAllHeader(QHeaderView):
     def _position_checkbox(self) -> None:
         if not hasattr(self, "checkbox"):
             return
-        hint = self.checkbox.sizeHint()
-        x = self.sectionViewportPosition(0) + 6
-        y = max(0, (self.height() - hint.height()) // 2)
-        self.checkbox.setGeometry(x, y, hint.width(), hint.height())
+        x = self.sectionViewportPosition(0) + 8
+        y = max(0, (self.height() - self.checkbox.height()) // 2)
+        self.checkbox.move(x, y)
 
 
 class _ArchiveScanThread(QThread):
@@ -730,7 +736,8 @@ class ArchiveMigrationPage(QWidget):
         self.table.setSortingEnabled(True)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(0, 104)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
@@ -822,6 +829,11 @@ class ArchiveMigrationPage(QWidget):
                 self._tr("status"),
             ]
         )
+        first_header_item = self.table.horizontalHeaderItem(0)
+        if first_header_item is not None:
+            first_header_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
         self._update_root_files_label()
         self._update_selection_summary()
         if not self.root_edit.text().strip() and not self._scan_thread:
