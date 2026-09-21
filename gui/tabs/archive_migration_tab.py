@@ -922,6 +922,7 @@ class ArchiveMigrationPage(QWidget):
         self.trash_orphaned_check.setEnabled(checked and not running)
         if not checked:
             self.trash_orphaned_check.setChecked(False)
+        self._refresh_queueable_flags()
 
     def start_queue(self) -> None:
         if self._queue_thread is not None and self._queue_thread.isRunning():
@@ -1002,6 +1003,7 @@ class ArchiveMigrationPage(QWidget):
                 persist=lambda state: ArchiveMigrationStateStore.save(
                     state, self.profile_name
                 ),
+                allow_done=options.sync_album,
             )
         except Exception as exc:
             QMessageBox.critical(self, self._tr("queue_error"), str(exc))
@@ -1151,7 +1153,7 @@ class ArchiveMigrationPage(QWidget):
 
             check = QTableWidgetItem()
             flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-            if entry.status not in {ArchiveFolderStatus.DONE, ArchiveFolderStatus.SKIP}:
+            if self._entry_is_queueable(entry.status):
                 flags |= Qt.ItemFlag.ItemIsUserCheckable
             check.setFlags(flags)
             check.setCheckState(Qt.CheckState.Unchecked)
@@ -1188,13 +1190,48 @@ class ArchiveMigrationPage(QWidget):
             if status_item is not None:
                 status_item.setText(status)
                 status_item.setData(Qt.ItemDataRole.UserRole, status)
-            if status in {
-                ArchiveFolderStatus.DONE.value,
-                ArchiveFolderStatus.SKIP.value,
-            }:
+            status_enum = ArchiveFolderStatus(status)
+            if not self._entry_is_queueable(status_enum):
                 check.setCheckState(Qt.CheckState.Unchecked)
                 check.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            else:
+                check.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled
+                    | Qt.ItemFlag.ItemIsSelectable
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                )
             return
+
+    def _entry_is_queueable(self, status: ArchiveFolderStatus) -> bool:
+        if status == ArchiveFolderStatus.SKIP:
+            return False
+        if status == ArchiveFolderStatus.DONE:
+            return self.sync_album_check.isChecked()
+        return status != ArchiveFolderStatus.UPLOADING
+
+    def _refresh_queueable_flags(self) -> None:
+        if not hasattr(self, "table"):
+            return
+        self.table.blockSignals(True)
+        try:
+            for row in range(self.table.rowCount()):
+                check = self.table.item(row, 0)
+                if check is None:
+                    continue
+                path = str(check.data(Qt.ItemDataRole.UserRole) or "")
+                entry = self.state.get(path)
+                if entry is None:
+                    continue
+                base_flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                if self._entry_is_queueable(entry.status):
+                    check.setFlags(base_flags | Qt.ItemFlag.ItemIsUserCheckable)
+                else:
+                    check.setCheckState(Qt.CheckState.Unchecked)
+                    check.setFlags(base_flags)
+        finally:
+            self.table.blockSignals(False)
+        self._update_selection_summary()
+        self._update_folder_action_buttons()
 
     def _refresh_status_cells(self) -> None:
         for path, entry in self.state.folders.items():
