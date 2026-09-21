@@ -349,3 +349,24 @@ def test_cancelled_current_folder_becomes_partial_not_error(tmp_path):
     assert summary.partial == 1
     assert summary.errors == 0
     assert summary.cancelled is True
+
+
+
+def test_done_folder_can_be_queued_only_for_album_sync(tmp_path):
+    state, anapa, _ = _state(tmp_path)
+    state.get(str(anapa)).status = ArchiveFolderStatus.DONE
+
+    items = build_archive_queue_items(
+        state,
+        [str(anapa)],
+        config_state=_config_state(),
+        binary_path="immich-go",
+        options=ArchiveQueueOptions(sync_album=True),
+    )
+
+    assert len(items) == 1
+    assert items[0].name == "Anapa"
+
+    prepare_archive_queue(state, items, allow_done=True)
+
+    assert state.get(str(anapa)).status == ArchiveFolderStatus.READY
