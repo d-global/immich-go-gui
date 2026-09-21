@@ -592,7 +592,6 @@ def test_done_folder_becomes_queueable_when_sync_is_enabled(
     assert not bool(done_check.flags() & Qt.ItemFlag.ItemIsUserCheckable)
 
 
-
 def test_enabling_sync_reveals_done_rows(tmp_path, monkeypatch, qtbot):
     state = _state_for(tmp_path)
     monkeypatch.setattr(
