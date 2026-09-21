@@ -105,8 +105,10 @@ def build_archive_queue_items(
 
     Every first-level folder is mapped to exactly one Immich album named after
     the folder.  Nested folders remain recursive input inside that album.
-    ``DONE`` and ``SKIP`` entries are intentionally rejected rather than being
-    silently re-uploaded.
+    ``SKIP`` entries are always rejected. ``DONE`` entries remain protected
+    during ordinary migration, but may be queued explicitly when album
+    synchronization is enabled so an already-migrated album can be reconciled
+    to its canonical source folder.
     """
 
     options = options or ArchiveQueueOptions()
@@ -118,7 +120,7 @@ def build_archive_queue_items(
         if entry is None or entry.path in seen:
             continue
         seen.add(entry.path)
-        _validate_prepare_status(entry)
+        _validate_prepare_status(entry, allow_done=options.sync_album)
 
         advanced_state = _merged_advanced_state(
             base_advanced_state,
@@ -172,6 +174,7 @@ def prepare_archive_queue(
     items: Iterable[ArchiveQueueItem],
     *,
     persist: QueuePersist | None = None,
+    allow_done: bool = False,
 ) -> None:
     """Mark prepared queue entries READY and persist once."""
 
@@ -180,7 +183,7 @@ def prepare_archive_queue(
         entry = state.get(item.path)
         if entry is None:
             continue
-        _validate_prepare_status(entry)
+        _validate_prepare_status(entry, allow_done=allow_done)
         entry.status = ArchiveFolderStatus.READY
         entry.last_error = None
         changed = True
@@ -317,8 +320,15 @@ def run_archive_queue(
     return summary
 
 
-def _validate_prepare_status(entry: ArchiveFolderEntry) -> None:
-    if entry.status not in _ALLOWED_PREPARE_STATUSES:
+def _validate_prepare_status(
+    entry: ArchiveFolderEntry,
+    *,
+    allow_done: bool = False,
+) -> None:
+    allowed = set(_ALLOWED_PREPARE_STATUSES)
+    if allow_done:
+        allowed.add(ArchiveFolderStatus.DONE)
+    if entry.status not in allowed:
         raise ValueError(
             f"Folder '{entry.name}' with status {entry.status.value} cannot be queued"
         )
