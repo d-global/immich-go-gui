@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 
 from core.archive_migration import (
     ArchiveFolderEntry,
@@ -496,9 +496,10 @@ def test_select_all_header_uses_real_native_checkbox(tmp_path, monkeypatch, qtbo
 
     checkbox = page.select_all_header.checkbox
     assert checkbox.parent() is page.select_all_header.viewport()
-    assert checkbox.width() > 0
-    assert checkbox.height() > 0
+    assert checkbox.width() == 16
+    assert checkbox.height() == 16
     assert checkbox.isVisible()
+    assert page.select_all_header.sectionsClickable() is True
 
 
 def test_archive_cleanup_options_are_dependency_safe(tmp_path, monkeypatch, qtbot):
@@ -615,3 +616,72 @@ def test_enabling_sync_reveals_done_rows(tmp_path, monkeypatch, qtbot):
     assert page.hide_done_check.isChecked() is False
     assert page.table.isRowHidden(row) is False
     assert bool(page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable)
+
+
+
+def test_archive_migration_header_click_sorts_columns(
+    tmp_path, monkeypatch, qtbot
+):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+    page.show()
+    page.hide_done_check.setChecked(False)
+
+    header = page.table.horizontalHeader()
+    x = header.sectionViewportPosition(2) + header.sectionSize(2) // 2
+    y = header.height() // 2
+
+    qtbot.mouseClick(
+        header.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(x, y),
+    )
+    first_order = [
+        int(page.table.item(row, 2).text())
+        for row in range(page.table.rowCount())
+    ]
+    assert first_order in ([19, 131], [131, 19])
+
+    qtbot.mouseClick(
+        header.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=QPoint(x, y),
+    )
+    second_order = [
+        int(page.table.item(row, 2).text())
+        for row in range(page.table.rowCount())
+    ]
+    assert second_order == list(reversed(first_order))
+
+
+def test_select_all_header_checkbox_has_clear_spacing(
+    tmp_path, monkeypatch, qtbot
+):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+    page.show()
+    qtbot.wait(20)
+
+    header = page.select_all_header
+    checkbox = header.checkbox
+    assert page.table.columnWidth(0) == 104
+    assert checkbox.x() >= 8
+    assert checkbox.width() == 16
