@@ -351,7 +351,6 @@ def test_cancelled_current_folder_becomes_partial_not_error(tmp_path):
     assert summary.cancelled is True
 
 
-
 def test_done_folder_can_be_queued_only_for_album_sync(tmp_path):
     state, anapa, _ = _state(tmp_path)
     state.get(str(anapa)).status = ArchiveFolderStatus.DONE
