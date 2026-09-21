@@ -554,7 +554,6 @@ def test_archive_migration_recheck_done_to_partial(tmp_path, monkeypatch, qtbot)
     assert bool(page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable)
 
 
-
 def test_done_folder_becomes_queueable_when_sync_is_enabled(
     tmp_path, monkeypatch, qtbot
 ):
