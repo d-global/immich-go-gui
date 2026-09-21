@@ -618,10 +618,7 @@ def test_enabling_sync_reveals_done_rows(tmp_path, monkeypatch, qtbot):
     assert bool(page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable)
 
 
-
-def test_archive_migration_header_click_sorts_columns(
-    tmp_path, monkeypatch, qtbot
-):
+def test_archive_migration_header_click_sorts_columns(tmp_path, monkeypatch, qtbot):
     state = _state_for(tmp_path)
     monkeypatch.setattr(
         "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
@@ -646,8 +643,7 @@ def test_archive_migration_header_click_sorts_columns(
         pos=QPoint(x, y),
     )
     first_order = [
-        int(page.table.item(row, 2).text())
-        for row in range(page.table.rowCount())
+        int(page.table.item(row, 2).text()) for row in range(page.table.rowCount())
     ]
     assert first_order in ([19, 131], [131, 19])
 
@@ -657,15 +653,12 @@ def test_archive_migration_header_click_sorts_columns(
         pos=QPoint(x, y),
     )
     second_order = [
-        int(page.table.item(row, 2).text())
-        for row in range(page.table.rowCount())
+        int(page.table.item(row, 2).text()) for row in range(page.table.rowCount())
     ]
     assert second_order == list(reversed(first_order))
 
 
-def test_select_all_header_checkbox_has_clear_spacing(
-    tmp_path, monkeypatch, qtbot
-):
+def test_select_all_header_checkbox_has_clear_spacing(tmp_path, monkeypatch, qtbot):
     state = _state_for(tmp_path)
     monkeypatch.setattr(
         "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
