@@ -552,3 +552,42 @@ def test_archive_migration_recheck_done_to_partial(tmp_path, monkeypatch, qtbot)
     row = _row_for(page, "Azov")
     assert page.table.item(row, 4).text() == "PARTIAL"
     assert bool(page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable)
+
+
+
+def test_done_folder_becomes_queueable_when_sync_is_enabled(
+    tmp_path, monkeypatch, qtbot
+):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+    page.hide_done_check.setChecked(False)
+
+    row = _row_for(page, "Azov")
+    done_check = page.table.item(row, 0)
+    assert not bool(done_check.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+
+    page.sync_album_check.setChecked(True)
+
+    row = _row_for(page, "Azov")
+    done_check = page.table.item(row, 0)
+    assert bool(done_check.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+
+    done_check.setCheckState(Qt.CheckState.Checked)
+    assert str(tmp_path / "Azov") in page.selected_folder_paths()
+    assert page.queue_start_button.isEnabled() is True
+
+    page.sync_album_check.setChecked(False)
+
+    row = _row_for(page, "Azov")
+    done_check = page.table.item(row, 0)
+    assert done_check.checkState() == Qt.CheckState.Unchecked
+    assert not bool(done_check.flags() & Qt.ItemFlag.ItemIsUserCheckable)
