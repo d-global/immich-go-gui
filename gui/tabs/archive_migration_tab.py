@@ -12,7 +12,8 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -47,7 +48,9 @@ from core.archive_migration_queue import (
 )
 from core.archive_migration_verify import (
     AlbumVerificationResult,
+    finalize_archive_album_verification,
     repair_archive_album_membership,
+    synchronize_archive_album_to_source,
     verify_archive_album,
 )
 from core.config_manager import default_config_dir
@@ -58,7 +61,7 @@ from core.profile_manager import active_profile_name
 _TRANSLATIONS = {
     "en": {
         "title": "Archive Migration",
-        "subtitle": "Migrate a legacy folder archive safely, one first-level folder per Immich album.",
+        "subtitle": "1 first-level folder = 1 Immich album.",
         "archive_root": "Archive root",
         "choose": "Choose folder",
         "scan": "Scan",
@@ -68,16 +71,25 @@ _TRANSLATIONS = {
         "hide_done": "Hide DONE",
         "language": "Language",
         "select": "Select",
+        "select_all_tip": "Select or clear all visible queueable folders",
+        "exclude_selected": "Exclude",
+        "exclude_tip": "Persistently mark checked or selected folders as SKIP",
+        "restore_selected": "Restore",
+        "restore_selected_tip": "Return selected SKIP folders to TODO",
+        "recheck_done": "Recheck DONE",
+        "recheck_done_tip": "Return selected DONE folders to PARTIAL so they can be verified or synchronized again",
+        "open_folder": "Open folder",
+        "open_folder_tip": "Open the current folder in the system file manager",
         "folder": "Folder",
         "files": "Files",
         "size": "Size",
         "status": "Status",
         "selected": "Selected: {folders} folders · {files} files · {size}",
-        "root_files": "Files directly in archive root: {files} · {size} · not included in the folder queue",
+        "root_files": "In folders: {folders} · {files} files · {size} | Root excluded: {root_files} files · {root_size}",
         "no_root": "Choose an archive root, then scan it.",
         "scanning": "Scanning {index}/{total}: {name} · {files} files · {size}",
         "scan_started": "Scanning archive...",
-        "scan_done": "Scan complete: {folders} folders · {files} root files",
+        "scan_done": "Scan complete: {folders} folders",
         "scan_cancelled": "Scan cancelled. Existing state was kept unchanged.",
         "scan_failed": "Archive scan failed",
         "invalid_root": "Choose an existing folder before scanning.",
@@ -88,6 +100,14 @@ _TRANSLATIONS = {
         "restore_trashed": "Restore matching duplicates from Immich trash",
         "restore_trashed_tip": "Restores only trash assets whose SHA1 matches files in the selected source folder.",
         "restore_trashed_enabled": "Targeted restore of matching trash duplicates is enabled.",
+        "sync_album": "Sync album to folder",
+        "sync_album_tip": "Remove target-album assets that are not present in the canonical local folder.",
+        "trash_orphaned_extras": "Trash extras unused by other albums",
+        "trash_orphaned_tip": "After sync, move an extra asset to Immich Trash only when it belongs to no other album.",
+        "sync_album_enabled": "Exact album-to-folder synchronization is enabled.",
+        "trash_orphaned_enabled": "Orphaned album extras will be moved to Immich Trash after cross-album checks.",
+        "cleanup_confirm_title": "Immich cleanup",
+        "cleanup_confirm_text": "After album sync, extra assets that are not used by any other album will be moved to Immich Trash. Continue?",
         "start_queue": "Upload selected",
         "cancel_queue": "Cancel queue",
         "queue_idle": "Select folders to prepare the migration queue.",
@@ -104,7 +124,7 @@ _TRANSLATIONS = {
     },
     "ru": {
         "title": "Миграция архива",
-        "subtitle": "Безопасная миграция старого архива: одна папка первого уровня = один альбом Immich.",
+        "subtitle": "1 папка первого уровня = 1 альбом Immich.",
         "archive_root": "Корень архива",
         "choose": "Выбрать папку",
         "scan": "Сканировать",
@@ -114,16 +134,25 @@ _TRANSLATIONS = {
         "hide_done": "Скрыть DONE",
         "language": "Язык",
         "select": "Выбрать",
+        "select_all_tip": "Выбрать или снять все видимые папки, доступные для очереди",
+        "exclude_selected": "Исключить",
+        "exclude_tip": "Навсегда пометить отмеченные или выделенные папки как SKIP",
+        "restore_selected": "Вернуть",
+        "restore_selected_tip": "Вернуть выделенные SKIP-папки в TODO",
+        "recheck_done": "Перепроверить DONE",
+        "recheck_done_tip": "Вернуть выбранные DONE-папки в PARTIAL для повторной проверки или синхронизации",
+        "open_folder": "Открыть папку",
+        "open_folder_tip": "Открыть текущую папку в Проводнике",
         "folder": "Папка",
         "files": "Файлов",
         "size": "Размер",
         "status": "Статус",
         "selected": "Выбрано: {folders} папок · {files} файлов · {size}",
-        "root_files": "Файлы прямо в корне архива: {files} · {size} · в очередь папок не входят",
+        "root_files": "В папках: {folders} · {files} файлов · {size} | В корне вне очереди: {root_files} файлов · {root_size}",
         "no_root": "Выберите корень архива и запустите сканирование.",
         "scanning": "Сканирование {index}/{total}: {name} · {files} файлов · {size}",
         "scan_started": "Сканирование архива...",
-        "scan_done": "Сканирование завершено: {folders} папок · {files} файлов в корне",
+        "scan_done": "Сканирование завершено: {folders} папок",
         "scan_cancelled": "Сканирование остановлено. Старое состояние сохранено без изменений.",
         "scan_failed": "Ошибка сканирования архива",
         "invalid_root": "Перед сканированием выберите существующую папку.",
@@ -134,6 +163,14 @@ _TRANSLATIONS = {
         "restore_trashed": "Восстанавливать найденные дубли из корзины",
         "restore_trashed_tip": "Восстанавливаются только assets из корзины, SHA1 которых совпал с файлами выбранной исходной папки.",
         "restore_trashed_enabled": "Включено точечное восстановление найденных дублей из корзины.",
+        "sync_album": "Синхронизировать альбом",
+        "sync_album_tip": "Убирает из целевого альбома assets, которых нет в канонической локальной папке.",
+        "trash_orphaned_extras": "Лишнее без других альбомов → в корзину",
+        "trash_orphaned_tip": "После синхронизации лишний asset попадёт в корзину Immich только если он не состоит ни в одном другом альбоме.",
+        "sync_album_enabled": "Включена точная синхронизация альбома с локальной папкой.",
+        "trash_orphaned_enabled": "Лишние assets без других альбомов будут перемещены в корзину Immich после проверки связей.",
+        "cleanup_confirm_title": "Очистка Immich",
+        "cleanup_confirm_text": "После синхронизации лишние assets, которые не используются ни в одном другом альбоме, будут перемещены в корзину Immich. Продолжить?",
         "start_queue": "Загрузить выбранное",
         "cancel_queue": "Остановить очередь",
         "queue_idle": "Выберите папки для подготовки очереди миграции.",
@@ -160,6 +197,74 @@ class _SortableItem(QTableWidgetItem):
         if mine is not None and theirs is not None:
             return mine < theirs
         return super().__lt__(other)
+
+
+class _HeaderCheckBox(QCheckBox):
+    """Native checkbox with predictable partial-state click behavior."""
+
+    def nextCheckState(self) -> None:
+        target = (
+            Qt.CheckState.Unchecked
+            if self.checkState() == Qt.CheckState.Checked
+            else Qt.CheckState.Checked
+        )
+        self.setCheckState(target)
+
+
+class _SelectAllHeader(QHeaderView):
+    """Header with a real native checkbox in the first table section."""
+
+    check_state_changed = Signal(int)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self.setSectionsClickable(True)
+        self.setSortIndicatorShown(True)
+        self.checkbox = _HeaderCheckBox(self.viewport())
+        self.checkbox.setTristate(True)
+        self.checkbox.setCheckState(Qt.CheckState.Unchecked)
+        self.checkbox.setFixedSize(16, 16)
+        self.checkbox.setStyleSheet(
+            "QCheckBox { padding: 0; margin: 0; }"
+            "QCheckBox::indicator { width: 13px; height: 13px; }"
+        )
+        self.checkbox.stateChanged.connect(self.check_state_changed)
+        self.sectionResized.connect(lambda *_args: self._position_checkbox())
+        self.geometriesChanged.connect(self._position_checkbox)
+        self._position_checkbox()
+
+    def checkState(self) -> Qt.CheckState:
+        return self.checkbox.checkState()
+
+    def setCheckState(self, state: Qt.CheckState) -> None:
+        self.checkbox.blockSignals(True)
+        try:
+            self.checkbox.setCheckState(Qt.CheckState(state))
+        finally:
+            self.checkbox.blockSignals(False)
+
+    def toggleCheckState(self) -> None:
+        self.checkbox.nextCheckState()
+
+    def setEnabled(self, enabled: bool) -> None:
+        super().setEnabled(enabled)
+        self.checkbox.setEnabled(enabled)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_checkbox()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._position_checkbox()
+        self.checkbox.show()
+
+    def _position_checkbox(self) -> None:
+        if not hasattr(self, "checkbox"):
+            return
+        x = self.sectionViewportPosition(0) + 8
+        y = max(0, (self.height() - self.checkbox.height()) // 2)
+        self.checkbox.move(x, y)
 
 
 class _ArchiveScanThread(QThread):
@@ -213,6 +318,8 @@ class _ArchiveQueueThread(QThread):
         skip_ssl: bool,
         stop_on_error: bool,
         restore_trashed: bool,
+        sync_album: bool,
+        trash_orphaned_extras: bool,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -226,6 +333,8 @@ class _ArchiveQueueThread(QThread):
         self.skip_ssl = skip_ssl
         self.stop_on_error = stop_on_error
         self.restore_trashed = restore_trashed
+        self.sync_album = sync_album
+        self.trash_orphaned_extras = trash_orphaned_extras
         self._cancel_event = threading.Event()
         self.runner_state = RunnerState()
 
@@ -284,19 +393,28 @@ class _ArchiveQueueThread(QThread):
         )
         self.log_line.emit(item.name, verification.message)
 
+        server_duplicates = int(getattr(result, "files_skipped", 0) or 0)
+        needs_membership_check = (
+            not verification.success or server_duplicates > 0 or self.sync_album
+        )
         can_repair = (
-            not verification.success
+            needs_membership_check
             and verification.album_id is not None
             and isinstance(verification.actual_assets, int)
-            and verification.actual_assets < expected_assets
             and not self._cancel_event.is_set()
         )
         if not can_repair:
             return verification
 
+        if not verification.success:
+            reason = "Album count differs"
+        elif server_duplicates > 0:
+            reason = f"{server_duplicates} server duplicates need membership proof"
+        else:
+            reason = "Album synchronization needs canonical source IDs"
         self.log_line.emit(
             item.name,
-            "Album is under-filled; starting targeted membership repair",
+            f"{reason}; checking source membership by SHA1",
         )
         repair = repair_archive_album_membership(
             self.server_url,
@@ -321,10 +439,47 @@ class _ArchiveQueueThread(QThread):
             skip_ssl=self.skip_ssl,
         )
         self.log_line.emit(item.name, f"Post-repair: {final.message}")
-        if final.success:
-            return final
+        reconciled = finalize_archive_album_verification(final, repair)
+        self.log_line.emit(item.name, f"Membership result: {reconciled.message}")
+        if reconciled.success and self.sync_album:
+            sync_result = synchronize_archive_album_to_source(
+                self.server_url,
+                self.api_key,
+                verification.album_id or "",
+                repair.resolved_asset_ids,
+                trash_orphaned_extras=self.trash_orphaned_extras,
+                skip_ssl=self.skip_ssl,
+                cancel_event=self._cancel_event,
+                on_log=lambda message: self.log_line.emit(item.name, message),
+            )
+            self.log_line.emit(item.name, sync_result.message)
+            for detail in sync_result.details:
+                self.log_line.emit(item.name, f"Cleanup detail: {detail}")
 
-        message = final.message
+            if not sync_result.success:
+                return AlbumVerificationResult(
+                    success=False,
+                    album_name=reconciled.album_name,
+                    expected_assets=reconciled.expected_assets,
+                    actual_assets=sync_result.album_assets_after,
+                    album_id=reconciled.album_id,
+                    message=sync_result.message,
+                )
+
+            exact = verify_archive_album(
+                self.server_url,
+                self.api_key,
+                item.album_name,
+                expected_assets,
+                skip_ssl=self.skip_ssl,
+            )
+            self.log_line.emit(item.name, f"Post-sync: {exact.message}")
+            return exact
+
+        if reconciled.success:
+            return reconciled
+
+        message = reconciled.message
         if repair.blocked_assets:
             message += (
                 f"; {repair.blocked_assets} assets were rejected with no_permission"
@@ -333,10 +488,10 @@ class _ArchiveQueueThread(QThread):
             message += f"; {repair.trashed_assets} assets are in trash"
         return AlbumVerificationResult(
             success=False,
-            album_name=final.album_name,
-            expected_assets=final.expected_assets,
-            actual_assets=final.actual_assets,
-            album_id=final.album_id,
+            album_name=reconciled.album_name,
+            expected_assets=reconciled.expected_assets,
+            actual_assets=reconciled.actual_assets,
+            album_id=reconciled.album_id,
             message=message,
         )
 
@@ -401,19 +556,19 @@ class ArchiveMigrationPage(QWidget):
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(24, 18, 24, 18)
-        outer.setSpacing(12)
+        outer.setContentsMargins(16, 10, 16, 10)
+        outer.setSpacing(8)
 
         heading = QHBoxLayout()
-        title_box = QVBoxLayout()
+        heading.setSpacing(10)
         self.title_label = QLabel()
         self.title_label.setObjectName("PageTitle")
+        heading.addWidget(self.title_label)
+
         self.subtitle_label = QLabel()
         self.subtitle_label.setObjectName("MutedText")
-        self.subtitle_label.setWordWrap(True)
-        title_box.addWidget(self.title_label)
-        title_box.addWidget(self.subtitle_label)
-        heading.addLayout(title_box, 1)
+        self.subtitle_label.setWordWrap(False)
+        heading.addWidget(self.subtitle_label, 1)
 
         self.language_label = QLabel()
         heading.addWidget(self.language_label)
@@ -429,10 +584,11 @@ class ArchiveMigrationPage(QWidget):
         source_frame = QFrame()
         source_frame.setObjectName("Card")
         source_layout = QVBoxLayout(source_frame)
-        source_layout.setContentsMargins(16, 14, 16, 14)
-        source_layout.setSpacing(10)
+        source_layout.setContentsMargins(12, 8, 12, 8)
+        source_layout.setSpacing(5)
 
         source_row = QHBoxLayout()
+        source_row.setSpacing(8)
         self.root_label = QLabel()
         source_row.addWidget(self.root_label)
         self.root_edit = QLineEdit()
@@ -451,15 +607,20 @@ class ArchiveMigrationPage(QWidget):
         source_row.addWidget(self.cancel_button)
         source_layout.addLayout(source_row)
 
+        source_meta_row = QHBoxLayout()
+        source_meta_row.setSpacing(12)
         self.progress_label = QLabel()
         self.progress_label.setObjectName("MutedText")
-        source_layout.addWidget(self.progress_label)
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        source_layout.addWidget(self.progress_bar)
+        source_meta_row.addWidget(self.progress_label, 1)
         self.root_files_label = QLabel()
         self.root_files_label.setObjectName("MutedText")
-        source_layout.addWidget(self.root_files_label)
+        source_meta_row.addWidget(self.root_files_label)
+        source_layout.addLayout(source_meta_row)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setFixedHeight(12)
+        self.progress_bar.setVisible(False)
+        source_layout.addWidget(self.progress_bar)
         outer.addWidget(source_frame)
 
         filter_row = QHBoxLayout()
@@ -478,15 +639,32 @@ class ArchiveMigrationPage(QWidget):
         self.hide_done_check.setChecked(True)
         self.hide_done_check.toggled.connect(self._apply_filters)
         filter_row.addWidget(self.hide_done_check)
+
+        self.open_folder_button = QPushButton()
+        self.open_folder_button.clicked.connect(self.open_current_folder)
+        filter_row.addWidget(self.open_folder_button)
+
+        self.exclude_button = QPushButton()
+        self.exclude_button.clicked.connect(self.exclude_selected_folders)
+        filter_row.addWidget(self.exclude_button)
+
+        self.restore_skip_button = QPushButton()
+        self.restore_skip_button.clicked.connect(self.restore_selected_skips)
+        filter_row.addWidget(self.restore_skip_button)
+
+        self.recheck_done_button = QPushButton()
+        self.recheck_done_button.clicked.connect(self.recheck_selected_done)
+        filter_row.addWidget(self.recheck_done_button)
         outer.addLayout(filter_row)
 
         queue_frame = QFrame()
         queue_frame.setObjectName("Card")
         queue_layout = QVBoxLayout(queue_frame)
-        queue_layout.setContentsMargins(16, 12, 16, 12)
-        queue_layout.setSpacing(8)
+        queue_layout.setContentsMargins(12, 8, 12, 8)
+        queue_layout.setSpacing(5)
 
         queue_controls = QHBoxLayout()
+        queue_controls.setSpacing(8)
         self.queue_tag_label = QLabel()
         queue_controls.addWidget(self.queue_tag_label)
         self.queue_tag_edit = QLineEdit()
@@ -509,36 +687,64 @@ class ArchiveMigrationPage(QWidget):
         queue_controls.addWidget(self.queue_cancel_button)
         queue_layout.addLayout(queue_controls)
 
+        cleanup_controls = QHBoxLayout()
+        cleanup_controls.setSpacing(12)
         self.restore_trashed_check = QCheckBox()
         self.restore_trashed_check.setChecked(False)
-        queue_layout.addWidget(self.restore_trashed_check)
+        cleanup_controls.addWidget(self.restore_trashed_check)
 
+        self.sync_album_check = QCheckBox()
+        self.sync_album_check.setChecked(False)
+        self.sync_album_check.toggled.connect(self._on_sync_album_toggled)
+        cleanup_controls.addWidget(self.sync_album_check)
+
+        self.trash_orphaned_check = QCheckBox()
+        self.trash_orphaned_check.setChecked(False)
+        self.trash_orphaned_check.setEnabled(False)
+        cleanup_controls.addWidget(self.trash_orphaned_check)
+        cleanup_controls.addStretch()
+        queue_layout.addLayout(cleanup_controls)
+
+        queue_progress_row = QHBoxLayout()
+        queue_progress_row.setSpacing(10)
         self.queue_progress_label = QLabel()
         self.queue_progress_label.setObjectName("MutedText")
-        queue_layout.addWidget(self.queue_progress_label)
+        queue_progress_row.addWidget(self.queue_progress_label)
         self.queue_progress_bar = QProgressBar()
+        self.queue_progress_bar.setFixedHeight(12)
         self.queue_progress_bar.setVisible(False)
-        queue_layout.addWidget(self.queue_progress_bar)
+        queue_progress_row.addWidget(self.queue_progress_bar, 1)
+        queue_layout.addLayout(queue_progress_row)
+
         self.queue_log = QPlainTextEdit()
         self.queue_log.setReadOnly(True)
         self.queue_log.setMaximumBlockCount(1000)
-        self.queue_log.setMaximumHeight(130)
+        self.queue_log.setMinimumHeight(58)
+        self.queue_log.setMaximumHeight(78)
         queue_layout.addWidget(self.queue_log)
         outer.addWidget(queue_frame)
 
         self.table = QTableWidget(0, 5)
+        self.select_all_header = _SelectAllHeader(self.table)
+        self.select_all_header.check_state_changed.connect(self._on_select_all_changed)
+        self.table.setHorizontalHeader(self.select_all_header)
+        self._syncing_select_all = False
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setAlternatingRowColors(True)
+        self.table.setMinimumHeight(280)
         self.table.setSortingEnabled(True)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(0, 104)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.table.itemChanged.connect(self._on_table_item_changed)
+        self.table.itemSelectionChanged.connect(self._update_folder_action_buttons)
+        self.table.itemDoubleClicked.connect(self._on_table_item_double_clicked)
         outer.addWidget(self.table, 1)
 
         summary_row = QHBoxLayout()
@@ -598,6 +804,19 @@ class ArchiveMigrationPage(QWidget):
         self.stop_on_error_check.setText(self._tr("stop_on_error"))
         self.restore_trashed_check.setText(self._tr("restore_trashed"))
         self.restore_trashed_check.setToolTip(self._tr("restore_trashed_tip"))
+        self.sync_album_check.setText(self._tr("sync_album"))
+        self.sync_album_check.setToolTip(self._tr("sync_album_tip"))
+        self.trash_orphaned_check.setText(self._tr("trash_orphaned_extras"))
+        self.trash_orphaned_check.setToolTip(self._tr("trash_orphaned_tip"))
+        self.select_all_header.setToolTip(self._tr("select_all_tip"))
+        self.open_folder_button.setText(self._tr("open_folder"))
+        self.open_folder_button.setToolTip(self._tr("open_folder_tip"))
+        self.exclude_button.setText(self._tr("exclude_selected"))
+        self.exclude_button.setToolTip(self._tr("exclude_tip"))
+        self.restore_skip_button.setText(self._tr("restore_selected"))
+        self.restore_skip_button.setToolTip(self._tr("restore_selected_tip"))
+        self.recheck_done_button.setText(self._tr("recheck_done"))
+        self.recheck_done_button.setToolTip(self._tr("recheck_done_tip"))
         self.queue_start_button.setText(self._tr("start_queue"))
         self.queue_cancel_button.setText(self._tr("cancel_queue"))
         self.queue_log.setPlaceholderText(self._tr("queue_log"))
@@ -610,6 +829,11 @@ class ArchiveMigrationPage(QWidget):
                 self._tr("status"),
             ]
         )
+        first_header_item = self.table.horizontalHeaderItem(0)
+        if first_header_item is not None:
+            first_header_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
         self._update_root_files_label()
         self._update_selection_summary()
         if not self.root_edit.text().strip() and not self._scan_thread:
@@ -705,6 +929,15 @@ class ArchiveMigrationPage(QWidget):
         if thread is not None:
             thread.deleteLater()
 
+    def _on_sync_album_toggled(self, checked: bool) -> None:
+        running = self._queue_thread is not None and self._queue_thread.isRunning()
+        self.trash_orphaned_check.setEnabled(checked and not running)
+        if checked and self.hide_done_check.isChecked():
+            self.hide_done_check.setChecked(False)
+        if not checked:
+            self.trash_orphaned_check.setChecked(False)
+        self._refresh_queueable_flags()
+
     def start_queue(self) -> None:
         if self._queue_thread is not None and self._queue_thread.isRunning():
             return
@@ -751,7 +984,23 @@ class ArchiveMigrationPage(QWidget):
                 session_tag=self.session_tag_check.isChecked(),
                 stop_on_error=self.stop_on_error_check.isChecked(),
                 restore_trashed=self.restore_trashed_check.isChecked(),
+                sync_album=(
+                    self.sync_album_check.isChecked()
+                    or self.trash_orphaned_check.isChecked()
+                ),
+                trash_orphaned_extras=self.trash_orphaned_check.isChecked(),
             )
+            if options.trash_orphaned_extras:
+                answer = QMessageBox.question(
+                    self,
+                    self._tr("cleanup_confirm_title"),
+                    self._tr("cleanup_confirm_text"),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+
             items = build_archive_queue_items(
                 self.state,
                 selected_paths,
@@ -768,6 +1017,7 @@ class ArchiveMigrationPage(QWidget):
                 persist=lambda state: ArchiveMigrationStateStore.save(
                     state, self.profile_name
                 ),
+                allow_done=options.sync_album,
             )
         except Exception as exc:
             QMessageBox.critical(self, self._tr("queue_error"), str(exc))
@@ -787,6 +1037,10 @@ class ArchiveMigrationPage(QWidget):
         self._append_queue_log("", f"Queue prepared: {len(items)} folders")
         if options.restore_trashed:
             self._append_queue_log("", self._tr("restore_trashed_enabled"))
+        if options.sync_album:
+            self._append_queue_log("", self._tr("sync_album_enabled"))
+        if options.trash_orphaned_extras:
+            self._append_queue_log("", self._tr("trash_orphaned_enabled"))
 
         thread = _ArchiveQueueThread(
             state=self.state,
@@ -799,6 +1053,8 @@ class ArchiveMigrationPage(QWidget):
             skip_ssl=bool(config_state.get("skip-ssl", False)),
             stop_on_error=options.stop_on_error,
             restore_trashed=options.restore_trashed,
+            sync_album=options.sync_album,
+            trash_orphaned_extras=options.trash_orphaned_extras,
             parent=self,
         )
         self._queue_thread = thread
@@ -823,16 +1079,28 @@ class ArchiveMigrationPage(QWidget):
         self.choose_button.setEnabled(not running)
         self.scan_button.setEnabled(not running)
         self.table.setEnabled(not running)
+        self.select_all_header.setEnabled(not running)
         self.queue_tag_edit.setEnabled(not running)
         self.session_tag_check.setEnabled(not running)
         self.stop_on_error_check.setEnabled(not running)
         self.restore_trashed_check.setEnabled(not running)
+        self.sync_album_check.setEnabled(not running)
+        self.trash_orphaned_check.setEnabled(
+            not running and self.sync_album_check.isChecked()
+        )
+        self.open_folder_button.setEnabled(
+            not running and bool(self._current_folder_path())
+        )
+        self.exclude_button.setEnabled(not running)
+        self.restore_skip_button.setEnabled(not running)
+        self.recheck_done_button.setEnabled(not running)
         self.queue_cancel_button.setVisible(running)
         self.queue_cancel_button.setEnabled(running)
         if running:
             self.queue_start_button.setEnabled(False)
         else:
             self._update_selection_summary()
+            self._update_folder_action_buttons()
 
     def _on_queue_progress(
         self, index: int, total: int, path: str, name: str, status: str
@@ -899,7 +1167,7 @@ class ArchiveMigrationPage(QWidget):
 
             check = QTableWidgetItem()
             flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-            if entry.status not in {ArchiveFolderStatus.DONE, ArchiveFolderStatus.SKIP}:
+            if self._entry_is_queueable(entry.status):
                 flags |= Qt.ItemFlag.ItemIsUserCheckable
             check.setFlags(flags)
             check.setCheckState(Qt.CheckState.Unchecked)
@@ -936,13 +1204,48 @@ class ArchiveMigrationPage(QWidget):
             if status_item is not None:
                 status_item.setText(status)
                 status_item.setData(Qt.ItemDataRole.UserRole, status)
-            if status in {
-                ArchiveFolderStatus.DONE.value,
-                ArchiveFolderStatus.SKIP.value,
-            }:
+            status_enum = ArchiveFolderStatus(status)
+            if not self._entry_is_queueable(status_enum):
                 check.setCheckState(Qt.CheckState.Unchecked)
                 check.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            else:
+                check.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled
+                    | Qt.ItemFlag.ItemIsSelectable
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                )
             return
+
+    def _entry_is_queueable(self, status: ArchiveFolderStatus) -> bool:
+        if status == ArchiveFolderStatus.SKIP:
+            return False
+        if status == ArchiveFolderStatus.DONE:
+            return self.sync_album_check.isChecked()
+        return status != ArchiveFolderStatus.UPLOADING
+
+    def _refresh_queueable_flags(self) -> None:
+        if not hasattr(self, "table"):
+            return
+        self.table.blockSignals(True)
+        try:
+            for row in range(self.table.rowCount()):
+                check = self.table.item(row, 0)
+                if check is None:
+                    continue
+                path = str(check.data(Qt.ItemDataRole.UserRole) or "")
+                entry = self.state.get(path)
+                if entry is None:
+                    continue
+                base_flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                if self._entry_is_queueable(entry.status):
+                    check.setFlags(base_flags | Qt.ItemFlag.ItemIsUserCheckable)
+                else:
+                    check.setCheckState(Qt.CheckState.Unchecked)
+                    check.setFlags(base_flags)
+        finally:
+            self.table.blockSignals(False)
+        self._update_selection_summary()
+        self._update_folder_action_buttons()
 
     def _refresh_status_cells(self) -> None:
         for path, entry in self.state.folders.items():
@@ -969,6 +1272,178 @@ class ArchiveMigrationPage(QWidget):
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
         if item.column() == 0:
             self._update_selection_summary()
+
+    def _visible_queueable_check_items(self) -> list[QTableWidgetItem]:
+        items: list[QTableWidgetItem] = []
+        for row in range(self.table.rowCount()):
+            if self.table.isRowHidden(row):
+                continue
+            item = self.table.item(row, 0)
+            if item is None:
+                continue
+            if not bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+                continue
+            items.append(item)
+        return items
+
+    def _on_select_all_changed(self, state: int) -> None:
+        if self._syncing_select_all:
+            return
+        target = (
+            Qt.CheckState.Checked
+            if state == Qt.CheckState.Checked.value
+            else Qt.CheckState.Unchecked
+        )
+        self.table.blockSignals(True)
+        try:
+            for item in self._visible_queueable_check_items():
+                item.setCheckState(target)
+        finally:
+            self.table.blockSignals(False)
+        self._update_selection_summary()
+
+    def _sync_select_all_checkbox(self) -> None:
+        if not hasattr(self, "select_all_header"):
+            return
+        items = self._visible_queueable_check_items()
+        checked = sum(item.checkState() == Qt.CheckState.Checked for item in items)
+        if not items or checked == 0:
+            state = Qt.CheckState.Unchecked
+        elif checked == len(items):
+            state = Qt.CheckState.Checked
+        else:
+            state = Qt.CheckState.PartiallyChecked
+
+        self._syncing_select_all = True
+        try:
+            self.select_all_header.setCheckState(state)
+            self.select_all_header.setEnabled(
+                bool(items)
+                and not (
+                    self._queue_thread is not None and self._queue_thread.isRunning()
+                )
+            )
+        finally:
+            self._syncing_select_all = False
+
+    def _selected_row_paths(self) -> list[str]:
+        paths: list[str] = []
+        seen: set[str] = set()
+        selection = self.table.selectionModel()
+        if selection is None:
+            return paths
+        for index in selection.selectedRows():
+            item = self.table.item(index.row(), 0)
+            path = str(item.data(Qt.ItemDataRole.UserRole) or "") if item else ""
+            if path and path not in seen:
+                seen.add(path)
+                paths.append(path)
+        return paths
+
+    def _action_paths(self) -> list[str]:
+        checked = self.selected_folder_paths()
+        return checked if checked else self._selected_row_paths()
+
+    def _current_folder_path(self) -> str:
+        selected = self._selected_row_paths()
+        if selected:
+            return selected[0]
+        checked = self.selected_folder_paths()
+        return checked[0] if len(checked) == 1 else ""
+
+    def _update_folder_action_buttons(self) -> None:
+        if not hasattr(self, "open_folder_button"):
+            return
+        queue_running = (
+            self._queue_thread is not None and self._queue_thread.isRunning()
+        )
+        current = self._current_folder_path()
+        action_paths = self._action_paths()
+        self.open_folder_button.setEnabled(bool(current) and not queue_running)
+        self.exclude_button.setEnabled(
+            bool(action_paths)
+            and not queue_running
+            and any(
+                (entry := self.state.get(path)) is not None
+                and entry.status
+                not in {ArchiveFolderStatus.DONE, ArchiveFolderStatus.SKIP}
+                for path in action_paths
+            )
+        )
+        self.restore_skip_button.setEnabled(
+            bool(action_paths)
+            and not queue_running
+            and any(
+                (entry := self.state.get(path)) is not None
+                and entry.status == ArchiveFolderStatus.SKIP
+                for path in action_paths
+            )
+        )
+        self.recheck_done_button.setEnabled(
+            bool(action_paths)
+            and not queue_running
+            and any(
+                (entry := self.state.get(path)) is not None
+                and entry.status == ArchiveFolderStatus.DONE
+                for path in action_paths
+            )
+        )
+
+    def open_current_folder(self) -> None:
+        path = self._current_folder_path()
+        if not path or not Path(path).is_dir():
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def _on_table_item_double_clicked(self, item: QTableWidgetItem) -> None:
+        if item.column() == 1:
+            self.open_current_folder()
+
+    def exclude_selected_folders(self) -> None:
+        changed = False
+        for path in self._action_paths():
+            entry = self.state.get(path)
+            if entry is None or entry.status in {
+                ArchiveFolderStatus.DONE,
+                ArchiveFolderStatus.SKIP,
+                ArchiveFolderStatus.UPLOADING,
+            }:
+                continue
+            entry.status = ArchiveFolderStatus.SKIP
+            entry.last_error = None
+            changed = True
+        if not changed:
+            return
+        ArchiveMigrationStateStore.save(self.state, self.profile_name)
+        self._populate_table()
+
+    def restore_selected_skips(self) -> None:
+        changed = False
+        for path in self._selected_row_paths():
+            entry = self.state.get(path)
+            if entry is None or entry.status != ArchiveFolderStatus.SKIP:
+                continue
+            entry.status = ArchiveFolderStatus.TODO
+            entry.last_error = None
+            changed = True
+        if not changed:
+            return
+        ArchiveMigrationStateStore.save(self.state, self.profile_name)
+        self._populate_table()
+
+    def recheck_selected_done(self) -> None:
+        changed = False
+        for path in self._selected_row_paths():
+            entry = self.state.get(path)
+            if entry is None or entry.status != ArchiveFolderStatus.DONE:
+                continue
+            entry.status = ArchiveFolderStatus.PARTIAL
+            entry.last_error = "Reopened for explicit recheck/synchronization"
+            changed = True
+        if not changed:
+            return
+        ArchiveMigrationStateStore.save(self.state, self.profile_name)
+        self._populate_table()
 
     def selected_folder_paths(self) -> list[str]:
         paths: list[str] = []
@@ -1000,15 +1475,23 @@ class ArchiveMigrationPage(QWidget):
             self._queue_thread is not None and self._queue_thread.isRunning()
         )
         self.queue_start_button.setEnabled(folders > 0 and not queue_running)
+        self._sync_select_all_checkbox()
+        self._update_folder_action_buttons()
 
     def _update_root_files_label(self) -> None:
         if not hasattr(self, "root_files_label"):
             return
+        folder_entries = list(self.state.folders.values())
+        total_files = sum(entry.file_count for entry in folder_entries)
+        total_size = sum(entry.size_bytes for entry in folder_entries)
         self.root_files_label.setText(
             self._tr(
                 "root_files",
-                files=self.state.root_file_count,
-                size=_format_bytes(self.state.root_size_bytes),
+                folders=len(folder_entries),
+                files=total_files,
+                size=_format_bytes(total_size),
+                root_files=self.state.root_file_count,
+                root_size=_format_bytes(self.state.root_size_bytes),
             )
         )
 

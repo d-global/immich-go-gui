@@ -42,7 +42,7 @@ Each first-level folder has one of these states:
 - `TODO` — discovered, not prepared;
 - `READY` — selected/prepared for upload;
 - `UPLOADING` — active run;
-- `DONE` — immich-go completed and the target Immich album was verified server-side with exactly the expected asset count;
+- `DONE` — immich-go completed and the source assets were verified server-side as members of the target Immich album;
 - `PARTIAL` — processing made progress, but server-side album verification did not fully match;
 - `ERROR` — upload or server-side album verification failed;
 - `SKIP` — intentionally excluded.
@@ -51,9 +51,11 @@ A rescan refreshes file counts and sizes while preserving the lifecycle state fo
 
 State is profile-scoped in `archive_migration_state.json`, next to the existing profile configuration files.
 
-Archive Migration does not trust an immich-go exit code or its `added to album` event counter as proof of album membership. After every successful CLI run it independently queries Immich, resolves one exact-name destination album, and requires `assetCount` to exactly match the processed asset count before persisting `DONE`. Missing, ambiguous, unreadable, empty, short, or overfull target albums remain retryable as `ERROR` or `PARTIAL`.
+Archive Migration does not trust an immich-go exit code or its `added to album` event counter as proof of album membership. After every successful CLI run it independently queries Immich and resolves one exact-name destination album. Exact `assetCount` equality remains the fast path. When server duplicates are involved or the count differs, Archive Migration resolves the source files by SHA1 and proves per-source membership through Immich before persisting `DONE`.
 
-If an otherwise successful run leaves the target album under-filled, Archive Migration performs one targeted repair pass. It hashes the source files with SHA1, resolves existing same-user assets through Immich's official `POST /api/assets/bulk-upload-check`, and retries only album membership through `PUT /api/albums/{id}/assets`. The per-asset response is inspected: `duplicate` means the asset is already in the album, while `no_permission` is reported with the source filename instead of being silently accepted. Trashed assets are never restored automatically. An explicit queue option can restore only checksum-matched trash assets from the selected source folder through Immich's targeted `POST /api/trash/restore/assets` endpoint, after which the repair pass retries album membership. The option is off by default, requires `asset.delete` API permission, and never performs a global trash restore. The repair pass never changes visibility or metadata.
+The operator can additionally enable exact album synchronization. In this mode the local first-level folder is treated as the canonical album membership set. Assets present in the Immich album but absent from the local folder are removed from that album. An optional second cleanup switch then checks each removed extra against all other Immich albums. Extras that still belong to another album are kept on the server; extras that belong to no other album are moved to Immich Trash with `force=false`. Archive Migration never performs permanent deletion in this step. Physical storage is reclaimed later according to the Immich Trash retention policy or after the operator explicitly empties Trash.
+
+If an otherwise successful run needs membership proof or leaves the target album under-filled, Archive Migration performs one targeted repair pass. It hashes the source files with SHA1, resolves existing same-user assets through Immich's official `POST /api/assets/bulk-upload-check`, and retries only album membership through `PUT /api/albums/{id}/assets`. The per-asset response is inspected: `duplicate` means the asset is already in the album, while `no_permission` is reported with the source filename instead of being silently accepted. Trashed assets are never restored automatically. An explicit queue option can restore only checksum-matched trash assets from the selected source folder through Immich's targeted `POST /api/trash/restore/assets` endpoint, after which the repair pass retries album membership. The option is off by default, requires `asset.delete` API permission, and never performs a global trash restore. The repair pass never changes visibility or metadata.
 
 State schema v2 introduced this completion rule. A `DONE` entry persisted by schema v1 is reopened as `PARTIAL` on load because that older state predates server-side completion verification.
 
@@ -66,11 +68,14 @@ The eventual page is a workbench, not a wizard:
 3. search/sort/filter the table;
 4. hide `DONE` rows when desired;
 5. select multiple folders;
-6. set a shared tag and queue options;
-7. run sequential uploads, one folder at a time;
-8. map each selected first-level folder to an Immich album with that folder's name;
-9. verify the destination album on the Immich server after a successful CLI run;
-10. persist `DONE/ERROR/PARTIAL` after every folder, not only at the end of the batch.
+6. permanently exclude irrelevant folders as `SKIP`, restore them to `TODO` when needed, and open a source folder directly in the system file manager;
+7. review aggregate file/size totals for all first-level folders plus root files excluded from the queue;
+8. set a shared tag and queue options;
+9. run sequential uploads, one folder at a time;
+10. map each selected first-level folder to an Immich album with that folder's name;
+11. verify source membership in the destination album after a successful CLI run;
+12. optionally synchronize the destination album exactly to the canonical local folder and move orphaned extras to Immich Trash after cross-album checks;
+13. persist `DONE/ERROR/PARTIAL` after every folder, not only at the end of the batch. A user-cancelled active folder remains retryable as `PARTIAL`.
 
 The UI should expose current folder, queue position, progress, and the relevant log without making the user hunt through unrelated tabs.
 

@@ -1,3 +1,4 @@
+import threading
 from dataclasses import dataclass
 
 import pytest
@@ -317,3 +318,54 @@ def test_verification_extra_album_assets_is_error_not_partial(tmp_path):
     assert state.get(str(anapa)).status == ArchiveFolderStatus.ERROR
     assert summary.errors == 1
     assert summary.partial == 0
+
+
+def test_cancelled_current_folder_becomes_partial_not_error(tmp_path):
+    state, anapa, _ = _state(tmp_path)
+    items = build_archive_queue_items(
+        state,
+        [str(anapa)],
+        config_state=_config_state(),
+        binary_path="immich-go",
+    )
+    prepare_archive_queue(state, items)
+    cancel_event = threading.Event()
+
+    def execute(_item):
+        cancel_event.set()
+        return _Result(False, message="Upload cancelled", files_uploaded=0)
+
+    summary = run_archive_queue(
+        state,
+        items,
+        execute=execute,
+        persist=lambda _current: None,
+        cancel_event=cancel_event,
+    )
+
+    entry = state.get(str(anapa))
+    assert entry.status == ArchiveFolderStatus.PARTIAL
+    assert entry.last_error == "Upload cancelled"
+    assert summary.partial == 1
+    assert summary.errors == 0
+    assert summary.cancelled is True
+
+
+def test_done_folder_can_be_queued_only_for_album_sync(tmp_path):
+    state, anapa, _ = _state(tmp_path)
+    state.get(str(anapa)).status = ArchiveFolderStatus.DONE
+
+    items = build_archive_queue_items(
+        state,
+        [str(anapa)],
+        config_state=_config_state(),
+        binary_path="immich-go",
+        options=ArchiveQueueOptions(sync_album=True),
+    )
+
+    assert len(items) == 1
+    assert items[0].name == "Anapa"
+
+    prepare_archive_queue(state, items, allow_done=True)
+
+    assert state.get(str(anapa)).status == ArchiveFolderStatus.READY

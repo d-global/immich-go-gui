@@ -30,6 +30,8 @@ class ArchiveQueueOptions:
     session_tag: bool = True
     stop_on_error: bool = True
     restore_trashed: bool = False
+    sync_album: bool = False
+    trash_orphaned_extras: bool = False
 
 
 @dataclass
@@ -103,8 +105,10 @@ def build_archive_queue_items(
 
     Every first-level folder is mapped to exactly one Immich album named after
     the folder.  Nested folders remain recursive input inside that album.
-    ``DONE`` and ``SKIP`` entries are intentionally rejected rather than being
-    silently re-uploaded.
+    ``SKIP`` entries are always rejected. ``DONE`` entries remain protected
+    during ordinary migration, but may be queued explicitly when album
+    synchronization is enabled so an already-migrated album can be reconciled
+    to its canonical source folder.
     """
 
     options = options or ArchiveQueueOptions()
@@ -116,7 +120,7 @@ def build_archive_queue_items(
         if entry is None or entry.path in seen:
             continue
         seen.add(entry.path)
-        _validate_prepare_status(entry)
+        _validate_prepare_status(entry, allow_done=options.sync_album)
 
         advanced_state = _merged_advanced_state(
             base_advanced_state,
@@ -170,6 +174,7 @@ def prepare_archive_queue(
     items: Iterable[ArchiveQueueItem],
     *,
     persist: QueuePersist | None = None,
+    allow_done: bool = False,
 ) -> None:
     """Mark prepared queue entries READY and persist once."""
 
@@ -178,7 +183,7 @@ def prepare_archive_queue(
         entry = state.get(item.path)
         if entry is None:
             continue
-        _validate_prepare_status(entry)
+        _validate_prepare_status(entry, allow_done=allow_done)
         entry.status = ArchiveFolderStatus.READY
         entry.last_error = None
         changed = True
@@ -238,8 +243,10 @@ def run_archive_queue(
         except Exception as exc:
             result = _FailedExecutionResult(str(exc))
 
+        cancelled_current = cancel_event is not None and cancel_event.is_set()
+
         verification = None
-        if result.success and verify is not None:
+        if result.success and verify is not None and not cancelled_current:
             try:
                 verification = verify(item, result)
             except Exception as exc:
@@ -250,11 +257,22 @@ def run_archive_queue(
         summary.not_started -= 1
         summary.processed_paths.append(item.path)
 
-        item_success = result.success and (verification is None or verification.success)
+        item_success = (
+            not cancelled_current
+            and result.success
+            and (verification is None or verification.success)
+        )
         if item_success:
             entry.status = ArchiveFolderStatus.DONE
             entry.last_error = None
             summary.done += 1
+        elif cancelled_current:
+            entry.status = ArchiveFolderStatus.PARTIAL
+            entry.last_error = result.message or (
+                "Upload was cancelled; server-side completion is unknown"
+            )
+            summary.partial += 1
+            summary.cancelled = True
         elif result.success and verification is not None:
             actual_assets = getattr(verification, "actual_assets", None)
             expected_assets = getattr(verification, "expected_assets", None)
@@ -302,8 +320,15 @@ def run_archive_queue(
     return summary
 
 
-def _validate_prepare_status(entry: ArchiveFolderEntry) -> None:
-    if entry.status not in _ALLOWED_PREPARE_STATUSES:
+def _validate_prepare_status(
+    entry: ArchiveFolderEntry,
+    *,
+    allow_done: bool = False,
+) -> None:
+    allowed = set(_ALLOWED_PREPARE_STATUSES)
+    if allow_done:
+        allowed.add(ArchiveFolderStatus.DONE)
+    if entry.status not in allowed:
         raise ValueError(
             f"Folder '{entry.name}' with status {entry.status.value} cannot be queued"
         )
