@@ -614,6 +614,4 @@ def test_enabling_sync_reveals_done_rows(tmp_path, monkeypatch, qtbot):
     row = _row_for(page, "Azov")
     assert page.hide_done_check.isChecked() is False
     assert page.table.isRowHidden(row) is False
-    assert bool(
-        page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable
-    )
+    assert bool(page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable)
