@@ -590,3 +590,31 @@ def test_done_folder_becomes_queueable_when_sync_is_enabled(
     done_check = page.table.item(row, 0)
     assert done_check.checkState() == Qt.CheckState.Unchecked
     assert not bool(done_check.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+
+
+
+def test_enabling_sync_reveals_done_rows(tmp_path, monkeypatch, qtbot):
+    state = _state_for(tmp_path)
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.active_profile_name", lambda: "test"
+    )
+    monkeypatch.setattr(
+        "gui.tabs.archive_migration_tab.ArchiveMigrationStateStore.load",
+        lambda *_: state,
+    )
+
+    page = ArchiveMigrationPage()
+    qtbot.addWidget(page)
+
+    row = _row_for(page, "Azov")
+    assert page.hide_done_check.isChecked() is True
+    assert page.table.isRowHidden(row) is True
+
+    page.sync_album_check.setChecked(True)
+
+    row = _row_for(page, "Azov")
+    assert page.hide_done_check.isChecked() is False
+    assert page.table.isRowHidden(row) is False
+    assert bool(
+        page.table.item(row, 0).flags() & Qt.ItemFlag.ItemIsUserCheckable
+    )
