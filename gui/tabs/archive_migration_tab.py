@@ -920,6 +920,8 @@ class ArchiveMigrationPage(QWidget):
     def _on_sync_album_toggled(self, checked: bool) -> None:
         running = self._queue_thread is not None and self._queue_thread.isRunning()
         self.trash_orphaned_check.setEnabled(checked and not running)
+        if checked and self.hide_done_check.isChecked():
+            self.hide_done_check.setChecked(False)
         if not checked:
             self.trash_orphaned_check.setChecked(False)
         self._refresh_queueable_flags()
